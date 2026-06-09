@@ -7,6 +7,9 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "bin": {
+    "nanofish": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

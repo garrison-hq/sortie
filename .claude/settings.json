@@ -10,6 +10,28 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codegraph sync -q \"$CLAUDE_PROJECT_DIR\" || true",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codegraph sync -q \"$CLAUDE_PROJECT_DIR\" || true",
+            "timeout": 120
+          }
+        ]
+      }
     ]
   }
 }
