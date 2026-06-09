@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nanofish": {
+      "command": "node",
+      "args": ["apps/mcp/dist/index.js"]
+    }
+  }
+}
