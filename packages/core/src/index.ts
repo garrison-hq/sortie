@@ -24,6 +24,11 @@ export type {
   ResolveRefFn,
   ExtractOptions,
   ExtractResult,
+  AgentStatus,
+  AgentRunOptions,
+  AgentAction,
+  StepRecord,
+  AgentRunResult,
 } from './contracts.js';
 
 // LLM provider layer. (Contract types re-exported by llm/index.js are
@@ -47,3 +52,10 @@ export {
   jsonSchemaToZod,
   EXTRACTION_SYSTEM_PROMPT,
 } from './extract/index.js';
+
+// Multi-step agent loop.
+export { runAgent } from './agent/loop.js';
+export { AGENT_TOOLS, executeAction } from './agent/tools.js';
+export type { ExecutionContext } from './agent/tools.js';
+export { buildAgentSystemPrompt } from './agent/prompts.js';
+export type { AgentSystemPromptOptions } from './agent/prompts.js';

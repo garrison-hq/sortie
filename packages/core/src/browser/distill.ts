@@ -15,6 +15,12 @@ import type { DistilledElement, PageSnapshot } from '../contracts.js';
 const OUTLINE_MAX = 15_000;
 const TRUNCATION_MARKER = '...[truncated]';
 
+/**
+ * Mask shown instead of the real value of `input[type=password]` elements in
+ * both `elements[]` and the outline. Real password values never leave the page.
+ */
+export const PASSWORD_MASK = '********';
+
 /** Shape returned by the in-page walker. */
 interface RawDistillResult {
   elements: DistilledElement[];
@@ -75,9 +81,13 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
   try {
     // Self-contained walker — no closure over Node scope; it is serialized
     // and executed inside the browser.
-    raw = await page.evaluate((): RawDistillResult => {
+    raw = await page.evaluate((passwordMask: string): RawDistillResult => {
       const win = globalThis as unknown as MinimalWindow;
       const doc = win.document;
+
+      const isPasswordInput = (el: MinimalElement): boolean =>
+        el.tagName.toLowerCase() === 'input' &&
+        (el.getAttribute('type') || '').toLowerCase() === 'password';
 
       const NAME_LIMIT = 120;
       const TEXT_LIMIT = 12000;
@@ -161,7 +171,8 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         if (text.trim()) return clip(collapse(text), NAME_LIMIT);
         const placeholder = el.getAttribute('placeholder');
         if (placeholder && placeholder.trim()) return clip(collapse(placeholder), NAME_LIMIT);
-        if (typeof el.value === 'string' && el.value.trim()) {
+        // Never fall back to the value of a password input — it is a secret.
+        if (!isPasswordInput(el) && typeof el.value === 'string' && el.value.trim()) {
           return clip(collapse(el.value), NAME_LIMIT);
         }
         return '';
@@ -207,7 +218,11 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
           typeof el.value === 'string'
         ) {
           const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : '';
-          if (type !== 'checkbox' && type !== 'radio') {
+          if (type === 'password') {
+            // Redact: a non-empty mask signals "filled in" without leaking
+            // the value (or even its length).
+            entry.value = el.value.length > 0 ? passwordMask : '';
+          } else if (type !== 'checkbox' && type !== 'radio') {
             entry.value = clip(el.value, NAME_LIMIT);
           }
         }
@@ -236,7 +251,7 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
       }
 
       return { elements, text };
-    });
+    }, PASSWORD_MASK);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(

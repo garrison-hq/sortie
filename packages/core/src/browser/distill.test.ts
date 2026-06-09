@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { Page, Locator } from 'playwright';
 import type { DistilledElement } from '../contracts.js';
-import { buildOutline, resolveRef } from './distill.js';
+import { buildOutline, distillPage, resolveRef, PASSWORD_MASK } from './distill.js';
 
 describe('buildOutline', () => {
   it('returns an empty string for an empty element list without throwing', () => {
@@ -69,5 +69,127 @@ describe('resolveRef', () => {
 
     expect(resolveRef(page, 'e12')).toBe(sentinel);
     expect(received).toBe('[data-nf-ref="e12"]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// distillPage password redaction — runs the in-page walker against a fake DOM
+// (the walker only uses structural types, so no browser is needed).
+// ---------------------------------------------------------------------------
+
+interface FakeElementInit {
+  tag: string;
+  attrs?: Record<string, string>;
+  value?: string;
+  text?: string;
+}
+
+interface FakeElement {
+  tagName: string;
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
+  getBoundingClientRect(): { width: number; height: number };
+  offsetParent: unknown;
+  innerText: string;
+  value?: string;
+}
+
+function makeFakeElement(init: FakeElementInit): FakeElement {
+  const attrs = new Map(Object.entries(init.attrs ?? {}));
+  const el: FakeElement = {
+    tagName: init.tag.toUpperCase(),
+    getAttribute: (name) => attrs.get(name) ?? null,
+    setAttribute: (name, value) => void attrs.set(name, value),
+    removeAttribute: (name) => void attrs.delete(name),
+    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    offsetParent: {},
+    innerText: init.text ?? '',
+  };
+  if (init.value !== undefined) el.value = init.value;
+  return el;
+}
+
+/**
+ * Install a fake `document`/`getComputedStyle` on globalThis and return a
+ * fake Page whose evaluate() runs the walker locally against them.
+ */
+function installFakeDom(elements: FakeElement[], bodyText = ''): Page {
+  const g = globalThis as Record<string, unknown>;
+  g['document'] = {
+    querySelectorAll: (selector: string) =>
+      selector === '[data-nf-ref]'
+        ? elements.filter((el) => el.getAttribute('data-nf-ref') !== null)
+        : elements,
+    body: { innerText: bodyText },
+  };
+  g['getComputedStyle'] = () => ({ visibility: 'visible', display: 'block', position: 'static' });
+
+  return {
+    evaluate: (fn: (arg: string) => unknown, arg: string) => Promise.resolve(fn(arg)),
+    url: () => 'https://example.com/login',
+    title: () => Promise.resolve('Login'),
+  } as unknown as Page;
+}
+
+afterEach(() => {
+  const g = globalThis as Record<string, unknown>;
+  delete g['document'];
+  delete g['getComputedStyle'];
+});
+
+describe('distillPage — password redaction', () => {
+  const RAW_PASSWORD = 'hunter2-very-secret';
+
+  it('masks non-empty password values everywhere and keeps other values intact', async () => {
+    const page = installFakeDom([
+      makeFakeElement({
+        tag: 'input',
+        attrs: { type: 'text', placeholder: 'Username' },
+        value: 'admin',
+      }),
+      makeFakeElement({
+        tag: 'input',
+        attrs: { type: 'password', placeholder: 'Password' },
+        value: RAW_PASSWORD,
+      }),
+    ]);
+
+    const snapshot = await distillPage(page);
+
+    const [username, password] = snapshot.elements;
+    expect(username?.value).toBe('admin');
+    expect(password?.value).toBe(PASSWORD_MASK);
+
+    // The raw secret appears nowhere in the snapshot.
+    expect(JSON.stringify(snapshot)).not.toContain(RAW_PASSWORD);
+    expect(snapshot.outline).toContain(`value="${PASSWORD_MASK}"`);
+    expect(snapshot.outline).toContain('value="admin"');
+  });
+
+  it('reports empty password fields as empty, not masked', async () => {
+    const page = installFakeDom([
+      makeFakeElement({ tag: 'input', attrs: { type: 'password' }, value: '' }),
+    ]);
+
+    const snapshot = await distillPage(page);
+
+    expect(snapshot.elements[0]?.value).toBe('');
+    expect(snapshot.outline).not.toContain(PASSWORD_MASK);
+  });
+
+  it('never derives an element name from a password value', async () => {
+    // Unlabeled password input: no aria-label/placeholder/text, only a value.
+    const page = installFakeDom([
+      makeFakeElement({ tag: 'input', attrs: { type: 'password' }, value: RAW_PASSWORD }),
+      // Control: a text input in the same situation does use its value.
+      makeFakeElement({ tag: 'input', attrs: { type: 'text' }, value: 'visible-value' }),
+    ]);
+
+    const snapshot = await distillPage(page);
+
+    expect(snapshot.elements[0]?.name).toBe('');
+    expect(snapshot.elements[1]?.name).toBe('visible-value');
+    expect(JSON.stringify(snapshot)).not.toContain(RAW_PASSWORD);
   });
 });

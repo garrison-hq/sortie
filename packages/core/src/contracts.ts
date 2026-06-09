@@ -130,3 +130,62 @@ export interface ExtractResult<T> {
   url: string;
   usage: TokenUsage;
 }
+
+// ---------------------------------------------------------------------------
+// Multi-step agent loop
+// ---------------------------------------------------------------------------
+
+export type AgentStatus = 'success' | 'failed' | 'max_steps';
+
+export interface AgentRunOptions<T> {
+  /** Natural-language goal, e.g. "log in, add the backpack to the cart, ..." */
+  goal: string;
+  startUrl: string;
+  /** Schema for the final structured output (submitted via the done tool). */
+  schema?: z.ZodType<T>;
+  provider?: LlmProvider;
+  /** Reuse an existing page; otherwise a browser is launched and cleaned up. */
+  page?: Page;
+  /** Hard cap on agent steps. Default 25. */
+  maxSteps?: number;
+  headless?: boolean;
+  storageStatePath?: string;
+  /**
+   * Named secrets. The model references them as "{{cred:NAME}}" in type-tool
+   * input; the executor substitutes real values. Raw values must never appear
+   * in prompts, traces, or logs.
+   */
+  credentials?: Record<string, string>;
+  /** Live observer for each completed step (powers the UI live view). */
+  onStep?: (step: StepRecord) => void;
+}
+
+export interface AgentAction {
+  /** navigate | click | type | select | scroll | wait | extract | done | fail */
+  tool: string;
+  /** Tool-specific input as produced by the model (credentials unresolved). */
+  input: Record<string, unknown>;
+}
+
+export interface StepRecord {
+  index: number;
+  url: string;
+  title: string;
+  /** Model's reasoning text accompanying the action ('' if none). */
+  thought: string;
+  action: AgentAction;
+  /** Executor result summary or error message fed back to the model. */
+  observation: string;
+  startedAt: number;
+  durationMs: number;
+}
+
+export interface AgentRunResult<T> {
+  status: AgentStatus;
+  /** Present when status === 'success'. */
+  output?: T;
+  failureReason?: string;
+  steps: StepRecord[];
+  usage: TokenUsage;
+  finalUrl: string;
+}

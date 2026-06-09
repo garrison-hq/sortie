@@ -26,18 +26,23 @@ check('initialize handshake', true);
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  'tools/list returns web_outline + web_extract',
-  names.join(',') === 'web_extract,web_outline',
+  'tools/list returns run_agent + web_outline + web_extract',
+  names.join(',') === 'run_agent,web_extract,web_outline',
   names.join(','),
 );
+const requiredFor = (toolName: string) =>
+  tools.find((t) => t.name === toolName)?.inputSchema.required;
 check(
-  'tool schemas are object-rooted with required url',
-  tools.every(
-    (t) =>
-      t.inputSchema.type === 'object' &&
-      Array.isArray(t.inputSchema.required) &&
-      t.inputSchema.required.includes('url'),
-  ),
+  'tool schemas are object-rooted with expected required fields',
+  tools.every((t) => t.inputSchema.type === 'object') &&
+    ['web_outline', 'web_extract'].every((n) => {
+      const required = requiredFor(n);
+      return Array.isArray(required) && required.includes('url');
+    }) &&
+    (() => {
+      const required = requiredFor('run_agent');
+      return Array.isArray(required) && required.includes('goal') && required.includes('startUrl');
+    })(),
 );
 
 // 2. Input validation: bad URL is a tool error, not a crash

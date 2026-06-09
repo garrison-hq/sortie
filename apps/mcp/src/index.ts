@@ -6,6 +6,7 @@
  * and act on the web like it were an API:
  *   - web_outline: distill a page into an LLM-readable outline (no LLM needed)
  *   - web_extract: schema-grounded semantic extraction (uses the configured provider)
+ *   - run_agent: multi-step browser agent driven by a natural-language goal
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -15,6 +16,7 @@ import {
   distillPage,
   navigateAndSettle,
   jsonSchemaToZod,
+  runAgent,
   withPage,
   VERSION,
 } from '@nanofish/core';
@@ -64,6 +66,38 @@ const TOOLS = [
         },
       },
       required: ['url', 'schema'],
+    },
+  },
+  {
+    name: 'run_agent',
+    description:
+      'Drive a real headless browser through a multi-step web task described in natural language: navigate, click, type, paginate, log in, and finally return structured, schema-validated results. Use this when a single extraction is not enough (e.g. "log in and fetch the order history", "page through all results and collect every item"). CAPTCHAs and anti-bot walls are not bypassed — the run fails gracefully with a clear reason. Requires an LLM provider key on the server.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: {
+          type: 'string',
+          description:
+            'Natural-language goal, e.g. "log in as standard_user, add the backpack to the cart, and report the cart total". Reference credentials as {{cred:NAME}} — never put secret values in the goal text.',
+        },
+        startUrl: { type: 'string', description: 'Absolute URL where the agent starts' },
+        schema: {
+          type: 'object',
+          description:
+            'Optional JSON Schema (root must be type:"object") that the final output must validate against',
+        },
+        maxSteps: {
+          type: 'number',
+          description: 'Hard cap on agent steps (default 25)',
+        },
+        credentials: {
+          type: 'object',
+          description:
+            'Named secrets the agent may type via {{cred:NAME}} placeholders. STRONGLY PREFER values of the form "env:VARNAME" (e.g. {"PASSWORD": "env:SHOP_PASSWORD"}), which are resolved from the server\'s environment at call time so secrets never travel through the client. Raw literal values are accepted but discouraged. Credential values are never shown to the model or included in results.',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['goal', 'startUrl'],
     },
   },
 ] as const;
@@ -121,6 +155,96 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           instruction: typeof instruction === 'string' ? instruction : undefined,
         });
         return textResult({ data: result.data, url: result.url, usage: result.usage });
+      }
+      case 'run_agent': {
+        const { goal, startUrl, schema, maxSteps, credentials } = (args ?? {}) as {
+          goal?: unknown;
+          startUrl?: unknown;
+          schema?: unknown;
+          maxSteps?: unknown;
+          credentials?: unknown;
+        };
+        if (typeof goal !== 'string' || goal.trim().length === 0) {
+          return errorResult(new Error('run_agent: "goal" must be a non-empty string'));
+        }
+        if (typeof startUrl !== 'string' || !/^https?:\/\//.test(startUrl)) {
+          return errorResult(new Error('run_agent: "startUrl" must be an absolute http(s) URL'));
+        }
+        if (
+          schema !== undefined &&
+          (typeof schema !== 'object' || schema === null || Array.isArray(schema))
+        ) {
+          return errorResult(new Error('run_agent: "schema" must be a JSON Schema object'));
+        }
+        if (
+          maxSteps !== undefined &&
+          (typeof maxSteps !== 'number' || !Number.isInteger(maxSteps) || maxSteps <= 0)
+        ) {
+          return errorResult(new Error('run_agent: "maxSteps" must be a positive integer'));
+        }
+        if (
+          credentials !== undefined &&
+          (typeof credentials !== 'object' || credentials === null || Array.isArray(credentials))
+        ) {
+          return errorResult(
+            new Error('run_agent: "credentials" must be an object of name -> value strings'),
+          );
+        }
+
+        // Resolve credentials. "env:VARNAME" values are read from the server's
+        // environment at call time. Resolved values are passed straight to the
+        // agent executor and never appear in prompts, results, or errors.
+        let resolvedCredentials: Record<string, string> | undefined;
+        if (credentials !== undefined) {
+          resolvedCredentials = {};
+          for (const [credName, credValue] of Object.entries(
+            credentials as Record<string, unknown>,
+          )) {
+            if (typeof credValue !== 'string') {
+              return errorResult(
+                new Error(`run_agent: credential "${credName}" must be a string value`),
+              );
+            }
+            if (credValue.startsWith('env:')) {
+              const envName = credValue.slice('env:'.length);
+              const envValue = process.env[envName];
+              if (envValue === undefined) {
+                return errorResult(
+                  new Error(
+                    `run_agent: credential "${credName}" references environment variable "${envName}", which is not set on the server`,
+                  ),
+                );
+              }
+              resolvedCredentials[credName] = envValue;
+            } else {
+              resolvedCredentials[credName] = credValue;
+            }
+          }
+        }
+
+        const zodSchema =
+          schema !== undefined ? jsonSchemaToZod(schema as Record<string, unknown>) : undefined;
+        const result = await runAgent({
+          goal,
+          startUrl,
+          schema: zodSchema,
+          maxSteps: maxSteps as number | undefined,
+          credentials: resolvedCredentials,
+        });
+
+        // Deliberately compact: step records contain page text and would bloat
+        // (and could leak into) the client's context.
+        const payload = {
+          status: result.status,
+          output: result.output,
+          failureReason: result.failureReason,
+          finalUrl: result.finalUrl,
+          stepCount: result.steps.length,
+          usage: result.usage,
+        };
+        return result.status === 'success'
+          ? textResult(payload)
+          : { ...textResult(payload), isError: true };
       }
       default:
         return errorResult(new Error(`Unknown tool: ${name}`));
