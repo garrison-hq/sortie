@@ -59,7 +59,7 @@ Requires Node >= 22 and pnpm.
 
 ```sh
 pnpm install
-pnpm exec playwright install chromium
+pnpm browsers     # installs the Playwright Chromium binary
 cp .env.example .env        # fill in an LLM key for live work; unit tests need none
 pnpm build
 ```

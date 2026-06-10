@@ -23,7 +23,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # several unit suites exercise real Chromium (distill, agent
       # tools, fetch) — they need the browser binary, not an LLM key
-      - run: pnpm exec playwright install chromium --with-deps
+      - run: pnpm browsers --with-deps
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

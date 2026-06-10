@@ -30,7 +30,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "browsers": "pnpm --filter @garrison-hq/sortie exec playwright install chromium"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -25,7 +25,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install chromium --with-deps
+      - run: pnpm browsers --with-deps
       - run: pnpm --filter @garrison-hq/sortie-ui e2e
       - name: Upload Playwright report on failure
         if: failure()

@@ -16,7 +16,7 @@ sortie is a local-first platform for autonomous web agents. Describe the data yo
 git clone https://github.com/garrison-hq/sortie
 cd sortie
 pnpm install
-pnpm exec playwright install chromium   # browser binary for local runs
+pnpm browsers                     # Playwright Chromium binary for local runs
 cp .env.example .env                    # then fill in your provider key
 pnpm build
 pnpm dev                                # server + playground at http://localhost:3470

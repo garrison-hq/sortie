@@ -25,7 +25,7 @@ Requires Node >= 22 and pnpm.
 
 ```sh
 pnpm install
-npx playwright install chromium   # browser binary for local runs
+pnpm browsers                     # Playwright Chromium binary for local runs
 cp .env.example .env              # then fill in your provider key (see below)
 pnpm build
 pnpm dev                          # server + playground at http://localhost:3470
