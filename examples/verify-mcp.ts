@@ -26,8 +26,8 @@ check('initialize handshake', true);
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  'tools/list returns run_agent + web_outline + web_extract',
-  names.join(',') === 'run_agent,web_extract,web_outline',
+  'tools/list returns the 6 nanofish tools',
+  names.join(',') === 'run_agent,run_saved_query,web_extract,web_fetch,web_outline,web_search',
   names.join(','),
 );
 const requiredFor = (toolName: string) =>
@@ -35,13 +35,21 @@ const requiredFor = (toolName: string) =>
 check(
   'tool schemas are object-rooted with expected required fields',
   tools.every((t) => t.inputSchema.type === 'object') &&
-    ['web_outline', 'web_extract'].every((n) => {
+    ['web_outline', 'web_extract', 'web_fetch'].every((n) => {
       const required = requiredFor(n);
       return Array.isArray(required) && required.includes('url');
     }) &&
     (() => {
       const required = requiredFor('run_agent');
       return Array.isArray(required) && required.includes('goal') && required.includes('startUrl');
+    })() &&
+    (() => {
+      const required = requiredFor('web_search');
+      return Array.isArray(required) && required.includes('query');
+    })() &&
+    (() => {
+      const required = requiredFor('run_saved_query');
+      return Array.isArray(required) && required.includes('name');
     })(),
 );
 
@@ -96,6 +104,52 @@ if (extractRes.isError) {
   check('web_extract live extraction succeeds', Array.isArray(extracted.data?.books));
   check('  got 3 books', extracted.data.books.length === 3, JSON.stringify(extracted.data.books));
   check('  usage reported', extracted.usage?.inputTokens > 0);
+}
+
+// 5. web_fetch live: HTML page -> clean Markdown (no LLM needed)
+const fetchRes = await client.callTool({
+  name: 'web_fetch',
+  arguments: { url: 'https://en.wikipedia.org/wiki/Web_scraping', maxChars: 20_000 },
+});
+const fetchText = (fetchRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+check('web_fetch live call succeeds', fetchRes.isError !== true, fetchText.slice(0, 200));
+if (fetchRes.isError !== true) {
+  const fetched = JSON.parse(fetchText);
+  check('  contentType is html', fetched.contentType === 'html');
+  check(
+    '  markdown headings present',
+    /^#{1,4} /m.test(String(fetched.markdown)),
+    String(fetched.markdown).match(/^#{1,4} .*$/m)?.[0],
+  );
+  check('  title mentions Web scraping', /web scraping/i.test(String(fetched.title)));
+}
+
+// 6. web_fetch input validation: bad URL is a tool error, not a crash
+const badFetch = await client.callTool({ name: 'web_fetch', arguments: { url: 'not-a-url' } });
+check('web_fetch rejects invalid url as isError', badFetch.isError === true);
+
+// 7. web_search live: graceful skip when every engine is challenged (anti-bot
+// evasion is out of scope — a clear failure message IS the contract then).
+const searchRes = await client.callTool({
+  name: 'web_search',
+  arguments: { query: 'playwright web automation', maxResults: 5 },
+});
+const searchText = (searchRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '';
+if (searchRes.isError === true) {
+  const graceful = /no backend produced results/i.test(searchText);
+  check(
+    'web_search engines unavailable -> graceful error names the fix (SKIPPED live assertions)',
+    graceful && /SEARXNG_BASE_URL/.test(searchText),
+    searchText.slice(0, 160),
+  );
+} else {
+  const found = JSON.parse(searchText);
+  check('web_search live call succeeds', Array.isArray(found.results), `source=${found.source}`);
+  check('  >= 3 results', found.results.length >= 3, String(found.results.length));
+  check(
+    '  result URLs are absolute http(s)',
+    found.results.every((r: { url: string }) => /^https?:\/\//.test(r.url)),
+  );
 }
 
 await client.close();
