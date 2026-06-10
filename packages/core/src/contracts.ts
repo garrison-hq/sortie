@@ -5,6 +5,9 @@
  * - `llm/`      — LLM provider layer (Anthropic + OpenAI-compatible)
  * - `browser/`  — Playwright browser manager + page distillation
  * - `extract/`  — semantic extraction (page + schema -> validated JSON)
+ * - `search/`   — web search (SearXNG-first, browser-engine fallback)
+ * - `fetch/`    — URL -> clean main-content Markdown (HTML or PDF)
+ * - `pdf/`      — PDF download + text extraction
  */
 import type { Page, Locator } from 'playwright';
 import type { z } from 'zod';
@@ -121,6 +124,9 @@ export interface ExtractOptions<T> {
   url?: string;
   /** Reuse an already-open page instead of navigating. */
   page?: Page;
+  /** Pre-built snapshot — skips navigation and distillation entirely
+   * (used for PDF documents, which have no live DOM to distill). */
+  snapshot?: PageSnapshot;
   /** zod schema the result must validate against. */
   schema: z.ZodType<T>;
   /** Natural-language hint about what to extract, e.g. "the product list". */
@@ -132,6 +138,95 @@ export interface ExtractResult<T> {
   data: T;
   url: string;
   usage: TokenUsage;
+}
+
+// ---------------------------------------------------------------------------
+// Web search
+// ---------------------------------------------------------------------------
+
+/** Browser-driven search engines, in default fallback order. */
+export type SearchEngineId = 'bing' | 'duckduckgo' | 'brave';
+
+export interface SearchResult {
+  title: string;
+  /** Absolute http(s) URL. */
+  url: string;
+  snippet: string;
+  /** Engine that produced the result (browser fallback path only). */
+  engine?: SearchEngineId;
+  /** 1-based rank within the returned list. */
+  position: number;
+}
+
+export interface SearchOptions {
+  /** Number of results to return. Default 10, clamped to 1..20. */
+  maxResults?: number;
+  /** Browser-engine fallback order. Default: bing, duckduckgo, brave. */
+  engines?: SearchEngineId[];
+  /** SearXNG instance to query first; defaults to $SEARXNG_BASE_URL. */
+  searxngBaseUrl?: string;
+  /** LLM provider for the semantic SERP-parse fallback. */
+  provider?: LlmProvider;
+  /** Reuse an already-open page for browser-engine searches. */
+  page?: Page;
+  headless?: boolean;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchResult[];
+  /** Backend that answered: SearXNG or the first non-challenged engine. */
+  source: 'searxng' | SearchEngineId;
+}
+
+/** Callable search backend (powers the agent's `search` tool). */
+export interface SearchProvider {
+  search(query: string, opts?: SearchOptions): Promise<SearchResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// URL -> Markdown fetch (HTML or PDF)
+// ---------------------------------------------------------------------------
+
+export interface FetchPageOptions {
+  url: string;
+  /** Reuse an already-open page instead of launching a browser. */
+  page?: Page;
+  /** Cap on markdown/text length. Default 80_000 (queued runs use 40_000). */
+  maxChars?: number;
+  /** Also collect absolute links from the main content. */
+  includeLinks?: boolean;
+  storageStatePath?: string;
+  headless?: boolean;
+}
+
+export interface FetchPageResult {
+  /** URL as requested. */
+  url: string;
+  /** URL after redirects. */
+  finalUrl: string;
+  title: string;
+  /** Clean main-content Markdown (boilerplate stripped). */
+  markdown: string;
+  /** Plain-text rendering of the same content. */
+  text: string;
+  /** Present when `includeLinks` was set. */
+  links?: { text: string; url: string }[];
+  contentType: 'html' | 'pdf';
+  /** True when the content was cut at `maxChars`. */
+  truncated: boolean;
+}
+
+/** Parsed PDF content (capped at download/page/char limits). */
+export interface PdfDocument {
+  /** Title from PDF metadata, when present. */
+  title?: string;
+  /** Total pages in the document (before any page cap). */
+  numPages: number;
+  /** Extracted text, one entry per included page. */
+  pages: string[];
+  /** True when the page or character caps cut content. */
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +292,13 @@ export interface AgentRunResult<T> {
 // Runtime: persistence, queue, batches
 // ---------------------------------------------------------------------------
 
-export type RunKind = 'extract' | 'agent';
+export type RunKind = 'extract' | 'agent' | 'fetch';
 export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'max_steps' | 'cancelled';
 
 /** Serializable description of a run — everything needed to (re)execute it. */
 export interface RunSpec {
   kind: RunKind;
-  /** Target URL (extract) or start URL (agent). */
+  /** Target URL (extract/fetch) or start URL (agent). */
   url: string;
   /** User-provided JSON Schema for the structured output. */
   schemaJson?: Record<string, unknown>;
@@ -215,6 +310,13 @@ export interface RunSpec {
   /** Env var NAMES to expose as credentials; values resolved at execution time. */
   credentialNames?: string[];
   storageStatePath?: string;
+  /** Named login profile, resolved to its storage-state path at execution
+   * time. Mutually exclusive with `storageStatePath`. */
+  profile?: string;
+  /** Saved query this run was replayed from (run-history link-back). */
+  queryName?: string;
+  /** Markdown length cap (kind: fetch). Queued runs default to 40_000. */
+  maxChars?: number;
 }
 
 export interface RunRecord {
@@ -237,20 +339,80 @@ export interface ListRunsOptions {
   offset?: number;
   batchId?: string;
   status?: RunStatus;
+  /** Filter to runs replayed from a saved query (spec.queryName). */
+  queryName?: string;
 }
 
-/** SQLite-backed persistence for runs, steps, and results. */
+/** A named, replayable run spec (v1: extract specs only). */
+export interface SavedQuery {
+  id: string;
+  /** Slug name, unique across saved queries. */
+  name: string;
+  spec: RunSpec;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  runCount: number;
+}
+
+/** Per-replay overrides applied on top of a saved query's spec. */
+export interface QueryRunOverrides {
+  url?: string;
+  instruction?: string;
+}
+
+/** Metadata for a named login profile. The storage-state JSON itself lives
+ * only on disk at `<dataDir>/profiles/<name>.json` and is never stored in
+ * the database or returned by any API. */
+export interface ProfileRecord {
+  /** Slug name; also the storage-state file's basename. */
+  name: string;
+  /** Site the profile logs into, e.g. "saucedemo.com" (informational). */
+  domainHint?: string;
+  notes?: string;
+  createdAt: number;
+  lastUsedAt?: number;
+}
+
+/** SQLite-backed persistence for runs, steps, results, saved queries, and
+ * login-profile metadata. */
 export interface RunStore {
   createRun(spec: RunSpec, batchId?: string): RunRecord;
   updateRun(id: string, patch: Partial<Omit<RunRecord, 'id' | 'spec' | 'createdAt'>>): RunRecord;
   getRun(id: string): RunRecord | undefined;
   listRuns(opts?: ListRunsOptions): RunRecord[];
-  countRuns(opts?: Pick<ListRunsOptions, 'batchId' | 'status'>): number;
+  countRuns(opts?: Pick<ListRunsOptions, 'batchId' | 'status' | 'queryName'>): number;
   appendStep(runId: string, step: StepRecord): void;
   getSteps(runId: string): StepRecord[];
   /** Serialize finished runs' outputs. CSV flattens one row per run (or per
    * array item when every output is an object with a single array field). */
   exportRuns(opts: { batchId?: string; runIds?: string[]; format: 'json' | 'csv' }): string;
+
+  // Saved queries (v1: kind 'extract' only).
+  /** Throws on non-slug names, non-extract specs, and duplicate names. */
+  createQuery(name: string, spec: RunSpec): SavedQuery;
+  /** Replace an existing query's spec. Throws on unknown names. */
+  updateQuery(name: string, spec: RunSpec): SavedQuery;
+  getQuery(name: string): SavedQuery | undefined;
+  listQueries(): SavedQuery[];
+  /** Returns false when no query by that name existed. */
+  deleteQuery(name: string): boolean;
+  /** Bump runCount and lastRunAt after a replay is submitted. */
+  recordQueryRun(name: string): void;
+
+  // Login profiles (metadata only — state JSON stays on disk).
+  upsertProfile(profile: Pick<ProfileRecord, 'name' | 'domainHint' | 'notes'>): ProfileRecord;
+  getProfile(name: string): ProfileRecord | undefined;
+  listProfiles(): ProfileRecord[];
+  /** Removes the metadata row AND the on-disk state file. Returns false when
+   * no profile by that name existed. */
+  deleteProfile(name: string): boolean;
+  /** Stamp lastUsedAt = now (called when a run resolves the profile). */
+  touchProfile(name: string): void;
+  /** Absolute-or-relative path of the profile's storage-state file, derived
+   * from the slug (never stored). Throws on non-slug names. */
+  profileStatePath(name: string): string;
+
   close(): void;
 }
 
