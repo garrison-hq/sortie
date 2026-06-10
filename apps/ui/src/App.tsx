@@ -42,7 +42,7 @@ export function App() {
     <>
       <nav className="nav">
         <a className="wordmark" href="#/new">
-          nano<span>fish</span>
+          sor<span>tie</span>
         </a>
         <a className={`nav-link ${route.view === 'new' ? 'active' : ''}`} href="#/new">
           New Run
