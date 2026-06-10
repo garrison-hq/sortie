@@ -1,0 +1,432 @@
+/**
+ * In-process run queue: executes persisted RunSpecs against a pool of
+ * browser workers with per-domain rate limiting and infrastructure retries.
+ *
+ * - One shared, lazily-launched BrowserManager backs all workers; each run
+ *   gets its own context/page, always closed when the run settles.
+ * - Workers pull FIFO with an eligibility scan: a head-of-queue item whose
+ *   domain is still inside its rate-limit window never blocks eligible work
+ *   for other domains behind it.
+ * - `executeRun` is injectable so unit tests can drive the queue without
+ *   browsers or LLM calls; the default executor dispatches on RunSpec.kind.
+ *
+ * Security invariant: credential VALUES are resolved from process.env at
+ * execution time and handed straight to the agent loop — only env var NAMES
+ * ever appear in records, events, or failure reasons.
+ */
+import { randomUUID } from 'node:crypto';
+import type {
+  LlmProvider,
+  QueueOptions,
+  RunEvent,
+  RunQueue,
+  RunRecord,
+  RunSpec,
+  RunStatus,
+  RunStore,
+  StepRecord,
+  TokenUsage,
+} from '../contracts.js';
+import { createProvider } from '../llm/index.js';
+import { BrowserManager } from '../browser/index.js';
+import { extract, navigateAndSettle, jsonSchemaToZod } from '../extract/index.js';
+import { runAgent } from '../agent/loop.js';
+
+const DEFAULT_CONCURRENCY = 5;
+const MIN_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 10;
+const DEFAULT_PER_DOMAIN_INTERVAL_MS = 1000;
+const DEFAULT_MAX_RETRIES = 2;
+
+/** What a single execution attempt settles to (or it throws: infra error). */
+export interface ExecuteRunOutcome {
+  status: RunStatus;
+  output?: unknown;
+  failureReason?: string;
+  usage?: TokenUsage;
+  finalUrl?: string;
+}
+
+/**
+ * Executes one RunSpec attempt. A THROW is an infrastructure error and is
+ * retried by the queue; a returned 'failed'/'max_steps' status is a final
+ * outcome. Injectable so the queue is unit-testable without browsers/LLMs.
+ */
+export type ExecuteRunFn = (
+  spec: RunSpec,
+  ctx: {
+    provider: LlmProvider;
+    manager: BrowserManager;
+    onStep: (step: StepRecord) => void;
+  },
+) => Promise<ExecuteRunOutcome>;
+
+type ExecuteRunCtx = Parameters<ExecuteRunFn>[1];
+
+/** Internal queue entry; `attempts` counts execution attempts so far. */
+interface QueueItem {
+  id: string;
+  spec: RunSpec;
+  batchId?: string;
+  attempts: number;
+}
+
+/**
+ * Create a RunQueue executing specs against `store` with a shared browser.
+ * Pass `executeRun` to replace the real extract/agent execution (tests).
+ */
+export function createRunQueue(
+  store: RunStore,
+  opts?: QueueOptions,
+  executeRun?: ExecuteRunFn,
+): RunQueue {
+  const concurrency = clamp(
+    Math.floor(opts?.concurrency ?? DEFAULT_CONCURRENCY),
+    MIN_CONCURRENCY,
+    MAX_CONCURRENCY,
+  );
+  const perDomainIntervalMs = opts?.perDomainIntervalMs ?? DEFAULT_PER_DOMAIN_INTERVAL_MS;
+  const maxRetries = opts?.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const exec = executeRun ?? defaultExecuteRun;
+
+  const manager = new BrowserManager();
+  // Provider is created lazily so constructing a queue (e.g. with an
+  // injected executeRun in tests) never requires provider env/config.
+  let provider: LlmProvider | undefined = opts?.provider;
+  function getProvider(): LlmProvider {
+    provider ??= createProvider();
+    return provider;
+  }
+
+  const queue: QueueItem[] = [];
+  const listeners = new Set<(ev: RunEvent) => void>();
+  /** Epoch ms of the last run START per hostname (rate-limit windows). */
+  const lastStartByHost = new Map<string, number>();
+
+  let active = 0;
+  let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
+  /** Pending wake-up for rate-limited work, plus its deadline. */
+  let wakeTimer: NodeJS.Timeout | null = null;
+  let wakeDeadline = 0;
+  const drainWaiters: Array<() => void> = [];
+  const idleWaiters: Array<() => void> = [];
+
+  function emit(ev: RunEvent): void {
+    for (const listener of [...listeners]) {
+      try {
+        listener(ev);
+      } catch {
+        // Listener exceptions must never disturb the queue.
+      }
+    }
+  }
+
+  function clearWakeTimer(): void {
+    if (wakeTimer) {
+      clearTimeout(wakeTimer);
+      wakeTimer = null;
+    }
+  }
+
+  /** Schedule a pump() wake-up, keeping only the earliest deadline. */
+  function scheduleWake(waitMs: number): void {
+    const deadline = Date.now() + waitMs;
+    if (wakeTimer && wakeDeadline <= deadline) return;
+    clearWakeTimer();
+    wakeDeadline = deadline;
+    wakeTimer = setTimeout(
+      () => {
+        wakeTimer = null;
+        pump();
+      },
+      Math.max(waitMs, 1),
+    );
+  }
+
+  /**
+   * Eligibility-scan pull: the first item (FIFO) whose domain is outside its
+   * rate-limit window is removed and returned. When everything queued is
+   * still rate-limited, returns the shortest wait instead.
+   */
+  function pickEligible(): { item?: QueueItem; waitMs?: number } {
+    const now = Date.now();
+    let minWait: number | undefined;
+    for (let i = 0; i < queue.length; i++) {
+      const item = queue[i]!;
+      const last = lastStartByHost.get(hostnameOf(item.spec.url));
+      const wait = last === undefined ? 0 : last + perDomainIntervalMs - now;
+      if (wait <= 0) {
+        queue.splice(i, 1);
+        return { item };
+      }
+      if (minWait === undefined || wait < minWait) {
+        minWait = wait;
+      }
+    }
+    return minWait === undefined ? {} : { waitMs: minWait };
+  }
+
+  function pump(): void {
+    if (shuttingDown) return;
+    while (active < concurrency) {
+      const { item, waitMs } = pickEligible();
+      if (!item) {
+        if (waitMs !== undefined) scheduleWake(waitMs);
+        return;
+      }
+      active++;
+      void runItem(item).finally(() => {
+        active--;
+        settleWaiters();
+        pump();
+      });
+    }
+  }
+
+  function settleWaiters(): void {
+    if (active > 0) return;
+    while (idleWaiters.length > 0) {
+      idleWaiters.pop()!();
+    }
+    if (queue.length === 0) {
+      while (drainWaiters.length > 0) {
+        drainWaiters.pop()!();
+      }
+    }
+  }
+
+  /** One execution attempt; settles the run or requeues on infra errors. */
+  async function runItem(item: QueueItem): Promise<void> {
+    const startedAt = Date.now();
+    lastStartByHost.set(hostnameOf(item.spec.url), startedAt);
+    item.attempts += 1;
+
+    const onStep = (step: StepRecord): void => {
+      store.appendStep(item.id, step);
+      emit({ type: 'run-step', runId: item.id, batchId: item.batchId, step });
+    };
+
+    try {
+      const started = store.updateRun(item.id, {
+        status: 'running',
+        startedAt,
+        attempts: item.attempts,
+      });
+      emit({ type: 'run-started', runId: item.id, batchId: item.batchId, record: started });
+
+      // `provider` is a lazy getter: it is only created (from opts/env) when
+      // the executor actually uses it, so injected test executors never
+      // require provider configuration.
+      const ctx: ExecuteRunCtx = {
+        manager,
+        onStep,
+        get provider(): LlmProvider {
+          return getProvider();
+        },
+      };
+      const outcome = await exec(item.spec, ctx);
+      finishRun(item, outcome);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (item.attempts <= maxRetries && !shuttingDown) {
+        // Infrastructure error with retry budget left: back to the queue tail.
+        store.updateRun(item.id, { status: 'queued' });
+        queue.push(item);
+        return;
+      }
+      finishRun(item, { status: 'failed', failureReason: message });
+    }
+  }
+
+  function finishRun(item: QueueItem, outcome: ExecuteRunOutcome): void {
+    const patch: Partial<Omit<RunRecord, 'id' | 'spec' | 'createdAt'>> = {
+      status: outcome.status,
+      finishedAt: Date.now(),
+    };
+    if (outcome.output !== undefined) patch.output = outcome.output;
+    if (outcome.failureReason !== undefined) patch.failureReason = outcome.failureReason;
+    if (outcome.usage !== undefined) patch.usage = outcome.usage;
+    if (outcome.finalUrl !== undefined) patch.finalUrl = outcome.finalUrl;
+
+    const record = store.updateRun(item.id, patch);
+    emit({ type: 'run-finished', runId: item.id, batchId: item.batchId, record });
+  }
+
+  function enqueue(record: RunRecord): void {
+    queue.push({
+      id: record.id,
+      spec: record.spec,
+      batchId: record.batchId,
+      attempts: 0,
+    });
+    emit({ type: 'run-queued', runId: record.id, batchId: record.batchId, record });
+  }
+
+  return {
+    submit(spec: RunSpec): RunRecord {
+      const record = store.createRun(spec);
+      enqueue(record);
+      pump();
+      return record;
+    },
+
+    submitBatch(specs: RunSpec[]): { batchId: string; runs: RunRecord[] } {
+      const batchId = randomUUID();
+      const runs = specs.map((spec) => {
+        const record = store.createRun(spec, batchId);
+        enqueue(record);
+        return record;
+      });
+      pump();
+      return { batchId, runs };
+    },
+
+    cancel(runId: string): boolean {
+      const index = queue.findIndex((item) => item.id === runId);
+      if (index === -1) return false;
+      const [item] = queue.splice(index, 1);
+      const record = store.updateRun(runId, { status: 'cancelled', finishedAt: Date.now() });
+      emit({ type: 'run-finished', runId, batchId: item!.batchId, record });
+      settleWaiters();
+      return true;
+    },
+
+    onEvent(listener: (ev: RunEvent) => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+
+    drain(): Promise<void> {
+      if (active === 0 && queue.length === 0) return Promise.resolve();
+      return new Promise((resolve) => {
+        drainWaiters.push(resolve);
+      });
+    },
+
+    shutdown(): Promise<void> {
+      shutdownPromise ??= (async () => {
+        shuttingDown = true;
+        clearWakeTimer();
+        if (active > 0) {
+          await new Promise<void>((resolve) => {
+            idleWaiters.push(resolve);
+          });
+        }
+        await manager.close();
+      })();
+      return shutdownPromise;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Default execution: real extract / agent runs
+// ---------------------------------------------------------------------------
+
+const defaultExecuteRun: ExecuteRunFn = async (spec, ctx) => {
+  switch (spec.kind) {
+    case 'extract':
+      return executeExtract(spec, ctx);
+    case 'agent':
+      return executeAgent(spec, ctx);
+  }
+};
+
+async function executeExtract(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteRunOutcome> {
+  if (!spec.schemaJson) {
+    // Spec defect, not an infrastructure error — final failure, no retry.
+    return {
+      status: 'failed',
+      failureReason: 'Extract runs require `schemaJson` (a JSON Schema for the output).',
+    };
+  }
+  const schema = jsonSchemaToZod(spec.schemaJson);
+
+  const page = await ctx.manager.newPage({ storageStatePath: spec.storageStatePath });
+  try {
+    await navigateAndSettle(page, spec.url);
+    const result = await extract({
+      page,
+      schema,
+      instruction: spec.instruction,
+      provider: ctx.provider,
+    });
+    return {
+      status: 'success',
+      output: result.data,
+      usage: result.usage,
+      finalUrl: result.url,
+    };
+  } finally {
+    await page
+      .context()
+      .close()
+      .catch(() => {});
+  }
+}
+
+async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteRunOutcome> {
+  if (!spec.goal) {
+    return {
+      status: 'failed',
+      failureReason: 'Agent runs require `goal` (the natural-language objective).',
+    };
+  }
+
+  // Resolve credentials from the environment by NAME; values never enter
+  // records, events, or failure reasons.
+  const credentials: Record<string, string> = {};
+  for (const name of spec.credentialNames ?? []) {
+    const value = process.env[name];
+    if (value === undefined) {
+      return {
+        status: 'failed',
+        failureReason: `Credential environment variable "${name}" is not set.`,
+      };
+    }
+    credentials[name] = value;
+  }
+
+  const page = await ctx.manager.newPage({ storageStatePath: spec.storageStatePath });
+  try {
+    const result = await runAgent({
+      goal: spec.goal,
+      startUrl: spec.url,
+      schema: spec.schemaJson ? jsonSchemaToZod(spec.schemaJson) : undefined,
+      maxSteps: spec.maxSteps,
+      page,
+      provider: ctx.provider,
+      credentials,
+      onStep: ctx.onStep,
+    });
+    return {
+      status: result.status,
+      output: result.output,
+      failureReason: result.failureReason,
+      usage: result.usage,
+      finalUrl: result.finalUrl,
+    };
+  } finally {
+    await page
+      .context()
+      .close()
+      .catch(() => {});
+  }
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    // Unparseable URLs share one rate-limit bucket; execution will surface
+    // the real navigation error.
+    return '';
+  }
+}

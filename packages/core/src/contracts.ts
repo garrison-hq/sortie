@@ -189,3 +189,98 @@ export interface AgentRunResult<T> {
   usage: TokenUsage;
   finalUrl: string;
 }
+
+// ---------------------------------------------------------------------------
+// Runtime: persistence, queue, batches
+// ---------------------------------------------------------------------------
+
+export type RunKind = 'extract' | 'agent';
+export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'max_steps' | 'cancelled';
+
+/** Serializable description of a run — everything needed to (re)execute it. */
+export interface RunSpec {
+  kind: RunKind;
+  /** Target URL (extract) or start URL (agent). */
+  url: string;
+  /** User-provided JSON Schema for the structured output. */
+  schemaJson?: Record<string, unknown>;
+  /** Extraction hint (kind: extract). */
+  instruction?: string;
+  /** Agent goal (kind: agent). */
+  goal?: string;
+  maxSteps?: number;
+  /** Env var NAMES to expose as credentials; values resolved at execution time. */
+  credentialNames?: string[];
+  storageStatePath?: string;
+}
+
+export interface RunRecord {
+  id: string;
+  spec: RunSpec;
+  status: RunStatus;
+  batchId?: string;
+  attempts: number;
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  output?: unknown;
+  failureReason?: string;
+  usage?: TokenUsage;
+  finalUrl?: string;
+}
+
+export interface ListRunsOptions {
+  limit?: number;
+  offset?: number;
+  batchId?: string;
+  status?: RunStatus;
+}
+
+/** SQLite-backed persistence for runs, steps, and results. */
+export interface RunStore {
+  createRun(spec: RunSpec, batchId?: string): RunRecord;
+  updateRun(id: string, patch: Partial<Omit<RunRecord, 'id' | 'spec' | 'createdAt'>>): RunRecord;
+  getRun(id: string): RunRecord | undefined;
+  listRuns(opts?: ListRunsOptions): RunRecord[];
+  countRuns(opts?: Pick<ListRunsOptions, 'batchId' | 'status'>): number;
+  appendStep(runId: string, step: StepRecord): void;
+  getSteps(runId: string): StepRecord[];
+  /** Serialize finished runs' outputs. CSV flattens one row per run (or per
+   * array item when every output is an object with a single array field). */
+  exportRuns(opts: { batchId?: string; runIds?: string[]; format: 'json' | 'csv' }): string;
+  close(): void;
+}
+
+export interface RunEvent {
+  type: 'run-queued' | 'run-started' | 'run-step' | 'run-finished';
+  runId: string;
+  batchId?: string;
+  /** Present on run-step. */
+  step?: StepRecord;
+  /** Present on run-queued/run-started/run-finished. */
+  record?: RunRecord;
+}
+
+export interface QueueOptions {
+  /** Parallel browser workers. Default 5, clamp 1..10. */
+  concurrency?: number;
+  /** Minimum ms between run starts against the same domain. Default 1000. */
+  perDomainIntervalMs?: number;
+  /** Re-attempts for infrastructure failures (timeouts, crashes) — NOT for
+   * agent-reported 'failed' outcomes. Default 2. */
+  maxRetries?: number;
+  provider?: LlmProvider;
+}
+
+/** In-process run queue executing RunSpecs against a worker pool. */
+export interface RunQueue {
+  submit(spec: RunSpec): RunRecord;
+  submitBatch(specs: RunSpec[]): { batchId: string; runs: RunRecord[] };
+  cancel(runId: string): boolean;
+  /** Subscribe to lifecycle events; returns an unsubscribe function. */
+  onEvent(listener: (ev: RunEvent) => void): () => void;
+  /** Resolves when all currently queued/running work has settled. */
+  drain(): Promise<void>;
+  /** Stop workers and close the shared browser. */
+  shutdown(): Promise<void>;
+}
