@@ -1,6 +1,13 @@
 # sortie
 
+[![CI](https://github.com/garrison-hq/sortie/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/garrison-hq/sortie/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+[![Node >= 22](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/typescript-strict-3178C6.svg)](./tsconfig.base.json)
+
 **Query and act on the web like it were an API.**
+
+> **Status:** pre-1.0, built alongside other work by one person. APIs and schemas may still change between commits. Production use at your own risk.
 
 sortie is a local-first platform for autonomous web agents. Describe the data you want in plain language plus a JSON Schema, and sortie drives a real Chromium browser, locates content by _meaning_ rather than brittle CSS/XPath selectors, and returns clean, schema-validated JSON — extractions keep working when a site's layout changes. For multi-step tasks ("log in, search for X, collect the first 20 results"), an agent loop plans and executes navigation, clicks, typing, and pagination, recovering from failures along the way. Everything runs on your machine: local browser automation, a SQLite-backed run queue, and your choice of LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint such as Ollama, vLLM, or OpenRouter).
 
@@ -348,3 +355,11 @@ pnpm typecheck && pnpm lint     # static checks
 pnpm --filter @garrison-hq/sortie-ui e2e  # full-stack Playwright e2e (builds the monorepo,
                                 # boots the real server, includes one live LLM extraction)
 ```
+
+## Contributing
+
+Issues and PRs are welcome — please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first; it covers the hard scope boundaries (no CAPTCHA/anti-bot work, credentials never reach the model), the live-verification standard, and what to expect from a solo-maintained project. Security-sensitive bugs go through the private path in [`SECURITY.md`](./SECURITY.md), not the issue tracker.
+
+## License
+
+[AGPL-3.0-only](./LICENSE). In short: use it, modify it, self-host it freely — but if you distribute it or run a modified version as a network service, the source of your version must be available under the same license. For commercial licensing questions, open an issue.

@@ -2,6 +2,13 @@
   "name": "@garrison-hq/sortie-server",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "sortie API server — Fastify REST + WebSocket live view; serves the built UI in production",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/garrison-hq/sortie.git",
+    "directory": "apps/server"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

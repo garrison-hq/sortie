@@ -1,0 +1,39 @@
+name: E2E (manual)
+
+# The full-stack Playwright suite boots the real server and makes one
+# live LLM extraction call, so it needs a provider key and is run on
+# demand rather than on every push. Set the OPENAI_API_KEY repository
+# secret (and optionally E2E_OPENAI_MODEL) before dispatching.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: full-stack e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SORTIE_PROVIDER: openai
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.E2E_OPENAI_MODEL || 'gpt-4.1-mini' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium --with-deps
+      - run: pnpm --filter @garrison-hq/sortie-ui e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/ui/playwright-report/
+            apps/ui/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

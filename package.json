@@ -4,6 +4,14 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "Local-first web-agent automation platform: query and act on the web like it were an API",
+  "author": "Jeroen Nouws",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/garrison-hq/sortie.git"
+  },
+  "homepage": "https://github.com/garrison-hq/sortie#readme",
+  "bugs": "https://github.com/garrison-hq/sortie/issues",
+  "packageManager": "pnpm@10.27.0",
   "type": "module",
   "engines": {
     "node": ">=22"

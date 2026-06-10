@@ -2,7 +2,36 @@
   "name": "@garrison-hq/sortie",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
+  "description": "Local-first web agents: semantic extraction, multi-step browser automation, web search, and URL-to-Markdown fetch — natural-language goal in, schema-validated JSON out",
+  "keywords": [
+    "web-agent",
+    "browser-automation",
+    "playwright",
+    "web-scraping",
+    "semantic-extraction",
+    "llm",
+    "web-search",
+    "mcp",
+    "local-first"
+  ],
+  "author": "Jeroen Nouws",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/garrison-hq/sortie.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/garrison-hq/sortie#readme",
+  "bugs": "https://github.com/garrison-hq/sortie/issues",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
