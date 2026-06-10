@@ -13,5 +13,22 @@ services:
     init: true
     restart: unless-stopped
 
+  # Optional self-hosted SearXNG metasearch backend for web search (structured
+  # JSON, no CAPTCHAs). Start it with the "search" profile:
+  #   docker compose --profile search up -d
+  # then set SEARXNG_BASE_URL=http://searxng:8080 in .env so nanofish uses it
+  # (containers reach each other by service name on the compose network).
+  # Before first start, change secret_key in searxng/settings.yml.
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ['search']
+    volumes:
+      - ./searxng:/etc/searxng
+    # Uncomment to also reach the instance from the host (e.g. CLI runs
+    # outside Docker with SEARXNG_BASE_URL=http://localhost:8888):
+    # ports:
+    #   - '8888:8080'
+    restart: unless-stopped
+
 volumes:
   nanofish-data:
