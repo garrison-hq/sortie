@@ -35,3 +35,10 @@ export function formatDuration(ms: number): string {
 export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/** Mirrors core's SLUG_PATTERN — valid saved-query / profile names. */
+export const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+export function isSlug(name: string): boolean {
+  return SLUG_PATTERN.test(name);
+}

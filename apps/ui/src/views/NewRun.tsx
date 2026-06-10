@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createRun } from '../api';
+import { createQuery, createRun, listProfiles } from '../api';
 import { ErrorBanner } from '../components/ErrorBanner';
-import type { RunKind, RunSpec } from '../types';
-import { messageOf } from '../util';
+import type { ProfileInfo, RunKind, RunSpec } from '../types';
+import { isSlug, messageOf } from '../util';
 
 const DEFAULT_MAX_STEPS = 25;
 
@@ -83,14 +83,28 @@ export function NewRun() {
   const [goal, setGoal] = useState('');
   const [schemaText, setSchemaText] = useState('');
   const [maxStepsText, setMaxStepsText] = useState(String(DEFAULT_MAX_STEPS));
+  const [maxCharsText, setMaxCharsText] = useState('');
   const [credsText, setCredsText] = useState('');
+  const [profile, setProfile] = useState('');
+  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [savedQueryName, setSavedQueryName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Login profiles are best-effort decoration — an older server without the
+  // endpoint just leaves the dropdown empty.
+  useEffect(() => {
+    listProfiles()
+      .then(setProfiles)
+      .catch(() => setProfiles([]));
+  }, []);
 
   const schemaState = useMemo(() => parseSchemaText(schemaText), [schemaText]);
 
   const maxSteps = Number(maxStepsText);
   const maxStepsValid = Number.isInteger(maxSteps) && maxSteps > 0;
+  const maxChars = Number(maxCharsText);
+  const maxCharsValid = maxCharsText.trim() === '' || (Number.isInteger(maxChars) && maxChars > 0);
 
   const canSubmit =
     !submitting &&
@@ -98,7 +112,9 @@ export function NewRun() {
     schemaState.kind !== 'invalid' &&
     (kind === 'extract'
       ? schemaState.kind === 'valid' // extract requires an output schema
-      : goal.trim() !== '' && maxStepsValid);
+      : kind === 'agent'
+        ? goal.trim() !== '' && maxStepsValid
+        : maxCharsValid); // fetch only needs a URL (and a sane optional cap)
 
   function applyPreset(preset: Preset): void {
     setKind(preset.kind);
@@ -111,31 +127,58 @@ export function NewRun() {
     setError(null);
   }
 
+  /** The spec the form currently describes (shared by submit + save-as-query). */
+  function buildSpec(): RunSpec {
+    const spec: RunSpec = { kind, url: url.trim() };
+    if (kind !== 'fetch' && schemaState.kind === 'valid') spec.schemaJson = schemaState.value;
+    if (kind === 'extract') {
+      const hint = instruction.trim();
+      if (hint !== '') spec.instruction = hint;
+    } else if (kind === 'agent') {
+      spec.goal = goal.trim();
+      spec.maxSteps = maxSteps;
+      const names = credsText
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name !== '');
+      if (names.length > 0) spec.credentialNames = names;
+    } else if (maxCharsText.trim() !== '' && maxCharsValid) {
+      spec.maxChars = maxChars;
+    }
+    if (profile !== '') spec.profile = profile;
+    return spec;
+  }
+
   async function submit(e: FormEvent): Promise<void> {
     e.preventDefault();
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
-      const spec: RunSpec = { kind, url: url.trim() };
-      if (schemaState.kind === 'valid') spec.schemaJson = schemaState.value;
-      if (kind === 'extract') {
-        const hint = instruction.trim();
-        if (hint !== '') spec.instruction = hint;
-      } else {
-        spec.goal = goal.trim();
-        spec.maxSteps = maxSteps;
-        const names = credsText
-          .split(',')
-          .map((name) => name.trim())
-          .filter((name) => name !== '');
-        if (names.length > 0) spec.credentialNames = names;
-      }
-      const record = await createRun(spec);
+      const record = await createRun(buildSpec());
       window.location.hash = `#/runs/${record.id}`;
     } catch (err) {
       setError(messageOf(err));
       setSubmitting(false);
+    }
+  }
+
+  async function saveAsQuery(): Promise<void> {
+    const name = window.prompt(
+      'Query name (lowercase letters, digits, "-" and "_"):',
+      savedQueryName ?? '',
+    );
+    if (name === null || name === '') return;
+    if (!isSlug(name)) {
+      setError(`"${name}" is not a valid query name (lowercase slug, max 64 chars).`);
+      return;
+    }
+    setError(null);
+    try {
+      const query = await createQuery(name, buildSpec());
+      setSavedQueryName(query.name);
+    } catch (err) {
+      setError(messageOf(err));
     }
   }
 
@@ -149,6 +192,9 @@ export function NewRun() {
     ) : (
       <span className="json-indicator empty">empty — agent output will be free-form</span>
     );
+
+  // Save-as-query needs the same validity as submitting an extract run.
+  const canSaveQuery = kind === 'extract' && url.trim() !== '' && schemaState.kind === 'valid';
 
   return (
     <div>
@@ -171,6 +217,13 @@ export function NewRun() {
               onClick={() => setKind('agent')}
             >
               agent
+            </button>
+            <button
+              type="button"
+              className={kind === 'fetch' ? 'active' : ''}
+              onClick={() => setKind('fetch')}
+            >
+              fetch
             </button>
           </div>
         </div>
@@ -198,7 +251,7 @@ export function NewRun() {
               placeholder="the list of books on the page"
             />
           </label>
-        ) : (
+        ) : kind === 'agent' ? (
           <label className="field">
             <span className="field-label">Goal</span>
             <textarea
@@ -207,22 +260,38 @@ export function NewRun() {
               placeholder="log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total"
             />
           </label>
+        ) : (
+          <label className="field">
+            <span className="field-label">
+              Max characters <span className="hint">optional cap on the returned markdown</span>
+            </span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={maxCharsText}
+              onChange={(e) => setMaxCharsText(e.target.value)}
+              placeholder="40000"
+            />
+          </label>
         )}
 
-        <label className="field">
-          <span className="field-label">
-            Output schema (JSON Schema)
-            {schemaIndicator}
-            <span className="spacer" />
-          </span>
-          <textarea
-            className="mono"
-            value={schemaText}
-            onChange={(e) => setSchemaText(e.target.value)}
-            placeholder='{"type":"object","properties":{...},"required":[...]}'
-            spellCheck={false}
-          />
-        </label>
+        {kind !== 'fetch' && (
+          <label className="field">
+            <span className="field-label">
+              Output schema (JSON Schema)
+              {schemaIndicator}
+              <span className="spacer" />
+            </span>
+            <textarea
+              className="mono"
+              value={schemaText}
+              onChange={(e) => setSchemaText(e.target.value)}
+              placeholder='{"type":"object","properties":{...},"required":[...]}'
+              spellCheck={false}
+            />
+          </label>
+        )}
 
         <div className="btn-group">
           {PRESETS.map((preset) => (
@@ -265,10 +334,44 @@ export function NewRun() {
           </div>
         )}
 
-        <div>
+        <label className="field">
+          <span className="field-label">
+            Login profile{' '}
+            <span className="hint">
+              reuse a saved session — create profiles with <code>nanofish profile login</code>
+            </span>
+          </span>
+          <select value={profile} onChange={(e) => setProfile(e.target.value)}>
+            <option value="">(none)</option>
+            {profiles.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+                {p.domainHint !== undefined ? ` — ${p.domainHint}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="btn-group">
           <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
             {submitting ? 'Submitting…' : 'Start run'}
           </button>
+          {kind === 'extract' && (
+            <button
+              type="button"
+              className="btn"
+              disabled={!canSaveQuery}
+              title={canSaveQuery ? undefined : 'Needs a URL and a valid output schema'}
+              onClick={() => void saveAsQuery()}
+            >
+              Save as query
+            </button>
+          )}
+          {savedQueryName !== null && (
+            <span className="hint">
+              saved as <a href="#/queries">{savedQueryName}</a> ✓
+            </span>
+          )}
         </div>
       </form>
     </div>

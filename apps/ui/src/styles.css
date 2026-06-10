@@ -184,6 +184,7 @@ a {
 .field input[type='text'],
 .field input[type='url'],
 .field input[type='number'],
+.field select,
 .field textarea {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -207,6 +208,7 @@ a {
 }
 
 .field input:focus,
+.field select:focus,
 .field textarea:focus {
   border-color: var(--accent);
 }
@@ -372,6 +374,19 @@ a {
   color: #9097a8;
 }
 
+/* stale login-profile marker */
+.chip-stale {
+  background: rgba(232, 161, 60, 0.16);
+  color: var(--amber);
+  margin-left: 8px;
+}
+
+/* "from query: <name>" link-back on run detail */
+.chip-query {
+  background: rgba(79, 156, 249, 0.12);
+  color: var(--accent);
+}
+
 /* filter chips (runs list) */
 .filter-chip {
   background: var(--bg-raised);
@@ -446,6 +461,53 @@ a {
   color: var(--text-dim);
   padding: 28px 0;
   text-align: center;
+}
+
+/* ---- queries / profiles tables --------------------------------------------- */
+
+/* unlike runs rows, these rows act through buttons, not row clicks */
+.queries-table tbody tr,
+.profiles-table tbody tr {
+  cursor: default;
+}
+
+.queries-table tbody tr:hover,
+.profiles-table tbody tr:hover {
+  background: transparent;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-danger:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.inline-url-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-url-input {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 3px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  width: 260px;
+}
+
+.inline-url-input:focus {
+  border-color: var(--accent);
 }
 
 /* ---- run detail ------------------------------------------------------------ */

@@ -5,7 +5,7 @@
  * in playwright/node deps) — keep these in sync with the core contracts.
  */
 
-export type RunKind = 'extract' | 'agent';
+export type RunKind = 'extract' | 'agent' | 'fetch';
 
 export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'max_steps' | 'cancelled';
 
@@ -29,6 +29,59 @@ export interface RunSpec {
   /** Env var NAMES to expose as credentials; values resolved server-side. */
   credentialNames?: string[];
   storageStatePath?: string;
+  /** Named login profile, resolved to its storage-state path server-side.
+   * Mutually exclusive with `storageStatePath`. */
+  profile?: string;
+  /** Saved query this run was replayed from (run-history link-back). */
+  queryName?: string;
+  /** Markdown length cap (kind: fetch). */
+  maxChars?: number;
+}
+
+/** A named, replayable run spec (v1: extract specs only). */
+export interface SavedQuery {
+  id: string;
+  /** Slug name, unique across saved queries. */
+  name: string;
+  spec: RunSpec;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  runCount: number;
+}
+
+/** Per-replay overrides applied on top of a saved query's spec. */
+export interface QueryRunOverrides {
+  url?: string;
+  instruction?: string;
+}
+
+/** Deterministic, value-free staleness summary of a profile's storage state. */
+export interface ProfileStateSummary {
+  /** False when no state file exists (all other fields are zero/empty). */
+  exists: boolean;
+  cookieCount: number;
+  /** Cookies with no expiry (browser-session lifetime). */
+  sessionCookieCount: number;
+  /** Persistent cookies whose expiry is already in the past. */
+  expiredCookieCount: number;
+  /** Unique cookie domains, leading "." stripped, sorted. */
+  domains: string[];
+  /** Earliest expiry among persistent cookies (epoch ms). */
+  earliestExpiresAt?: number;
+}
+
+/** Login-profile metadata + state summary as served by GET /api/profiles.
+ * The storage-state JSON itself never leaves the server. */
+export interface ProfileInfo {
+  /** Slug name; also the storage-state file's basename on the server. */
+  name: string;
+  /** Site the profile logs into, e.g. "saucedemo.com" (informational). */
+  domainHint?: string;
+  notes?: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  state: ProfileStateSummary;
 }
 
 export interface RunRecord {

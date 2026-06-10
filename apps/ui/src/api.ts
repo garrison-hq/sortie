@@ -6,7 +6,15 @@
  * Response shapes are normalized defensively (bare record vs `{ record }`
  * wrapper, bare array vs `{ runs }`) so the UI tolerates either convention.
  */
-import type { RunRecord, RunSpec, StepRecord } from './types';
+import type {
+  ProfileInfo,
+  ProfileStateSummary,
+  QueryRunOverrides,
+  RunRecord,
+  RunSpec,
+  SavedQuery,
+  StepRecord,
+} from './types';
 
 export class ApiError extends Error {
   readonly status: number | undefined;
@@ -194,6 +202,92 @@ function stepIndexFromName(name: string): number | undefined {
   const basename = name.split('/').pop() ?? '';
   const match = /(\d+)(?!.*\d)/.exec(basename);
   return match ? Number(match[1]) : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Saved queries
+// ---------------------------------------------------------------------------
+
+export async function listQueries(): Promise<SavedQuery[]> {
+  const body = await request('/api/queries');
+  if (Array.isArray(body)) return body as SavedQuery[];
+  if (isRecord(body) && Array.isArray(body['queries'])) return body['queries'] as SavedQuery[];
+  return [];
+}
+
+export async function createQuery(name: string, spec: RunSpec): Promise<SavedQuery> {
+  const body = await request('/api/queries', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, spec }),
+  });
+  // Accept a bare SavedQuery or a { query } wrapper.
+  if (isRecord(body)) {
+    if (typeof body['name'] === 'string' && isRecord(body['spec'])) {
+      return body as unknown as SavedQuery;
+    }
+    const nested = body['query'];
+    if (isRecord(nested) && typeof nested['name'] === 'string') {
+      return nested as unknown as SavedQuery;
+    }
+  }
+  throw new ApiError('POST /api/queries returned an unrecognized payload.');
+}
+
+export async function deleteQuery(name: string): Promise<void> {
+  await request(`/api/queries/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+/** Replay a saved query (optionally on an overridden URL/instruction);
+ * resolves to the queued RunRecord. */
+export async function runQuery(name: string, overrides?: QueryRunOverrides): Promise<RunRecord> {
+  const body = await request(`/api/queries/${encodeURIComponent(name)}/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(overrides ?? {}),
+  });
+  const record = unwrapRunRecord(body);
+  if (!record) {
+    throw new ApiError(`POST /api/queries/${name}/run returned an unrecognized payload.`);
+  }
+  return record;
+}
+
+// ---------------------------------------------------------------------------
+// Login profiles (metadata only — state JSON never reaches the browser)
+// ---------------------------------------------------------------------------
+
+const EMPTY_PROFILE_STATE: ProfileStateSummary = {
+  exists: false,
+  cookieCount: 0,
+  sessionCookieCount: 0,
+  expiredCookieCount: 0,
+  domains: [],
+};
+
+export async function listProfiles(): Promise<ProfileInfo[]> {
+  const body = await request('/api/profiles');
+  const items: unknown[] = Array.isArray(body)
+    ? body
+    : isRecord(body) && Array.isArray(body['profiles'])
+      ? (body['profiles'] as unknown[])
+      : [];
+  const profiles: ProfileInfo[] = [];
+  for (const item of items) {
+    if (!isRecord(item) || typeof item['name'] !== 'string') continue;
+    // The state summary may ride along as `state` or `summary`.
+    const state = isRecord(item['state'])
+      ? (item['state'] as unknown as ProfileStateSummary)
+      : isRecord(item['summary'])
+        ? (item['summary'] as unknown as ProfileStateSummary)
+        : EMPTY_PROFILE_STATE;
+    profiles.push({ ...(item as unknown as ProfileInfo), state });
+  }
+  return profiles;
+}
+
+export async function deleteProfile(name: string): Promise<void> {
+  await request(`/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
 // ---------------------------------------------------------------------------

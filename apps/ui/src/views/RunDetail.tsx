@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { batchCsvExportUrl, getRun, listScreenshots, screenshotImageUrl } from '../api';
+import {
+  batchCsvExportUrl,
+  createQuery,
+  getRun,
+  listScreenshots,
+  screenshotImageUrl,
+} from '../api';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { StatusChip } from '../components/StatusChip';
 import { StepItem } from '../components/StepItem';
 import type { RunRecord, StepRecord } from '../types';
-import { formatDuration, messageOf, shortId } from '../util';
+import { formatDuration, isSlug, messageOf, shortId } from '../util';
 import { subscribeStatus, useRunEvents } from '../ws';
 
 const TICK_INTERVAL_MS = 1000;
@@ -29,6 +35,7 @@ export function RunDetail({ runId }: { runId: string }) {
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
+  const [savedQueryName, setSavedQueryName] = useState<string | null>(null);
 
   const shotIndexRef = useRef(-1);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -136,6 +143,27 @@ export function RunDetail({ runId }: { runId: string }) {
       });
   }
 
+  /** Save this run's extract spec as a named, replayable query. */
+  async function saveAsQuery(): Promise<void> {
+    if (!record) return;
+    const name = window.prompt('Query name (lowercase letters, digits, "-" and "_"):', '');
+    if (name === null || name === '') return;
+    if (!isSlug(name)) {
+      setError(`"${name}" is not a valid query name (lowercase slug, max 64 chars).`);
+      return;
+    }
+    setError(null);
+    try {
+      // Strip the replay link-back: the saved spec stands on its own.
+      const spec = { ...record.spec };
+      delete spec.queryName;
+      const query = await createQuery(name, spec);
+      setSavedQueryName(query.name);
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
   function downloadRunJson(): void {
     if (!record) return;
     const blob = new Blob([JSON.stringify({ ...record, steps }, null, 2)], {
@@ -176,6 +204,11 @@ export function RunDetail({ runId }: { runId: string }) {
       <div className="run-header">
         <span className="kind-badge">{record.spec.kind}</span>
         <StatusChip status={record.status} />
+        {record.spec.queryName !== undefined && (
+          <a className="chip chip-query" href="#/queries" title="Replayed from a saved query">
+            from query: {record.spec.queryName}
+          </a>
+        )}
         <a
           className="run-url"
           href={record.spec.url}
@@ -189,6 +222,16 @@ export function RunDetail({ runId }: { runId: string }) {
           <span className="run-duration">{formatDuration(Math.max(0, durationMs))}</span>
         )}
         <span className="run-actions">
+          {record.spec.kind === 'extract' &&
+            (savedQueryName !== null ? (
+              <a className="btn btn-small" href="#/queries">
+                Saved as {savedQueryName} ✓
+              </a>
+            ) : (
+              <button type="button" className="btn btn-small" onClick={() => void saveAsQuery()}>
+                Save as query
+              </button>
+            ))}
           <button type="button" className="btn btn-small" onClick={downloadRunJson}>
             Download JSON
           </button>
@@ -261,8 +304,8 @@ export function RunDetail({ runId }: { runId: string }) {
                 <div className="timeline-empty">
                   {inFlight
                     ? 'Waiting for the first step…'
-                    : record.spec.kind === 'extract'
-                      ? 'Extract runs have no agent steps.'
+                    : record.spec.kind !== 'agent'
+                      ? `${record.spec.kind === 'fetch' ? 'Fetch' : 'Extract'} runs have no agent steps.`
                       : 'No steps recorded.'}
                 </div>
               ) : (
