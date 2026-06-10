@@ -24,6 +24,9 @@ jobs:
       # several unit suites exercise real Chromium (distill, agent
       # tools, fetch) — they need the browser binary, not an LLM key
       - run: pnpm browsers --with-deps
+      # apps typecheck against @garrison-hq/sortie's d.ts files in
+      # packages/core/dist — build the core package first
+      - run: pnpm --filter @garrison-hq/sortie build
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
