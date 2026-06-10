@@ -6,11 +6,14 @@ schema-validated JSON out. Full spec and decisions: see PROMPT.md and README.md.
 ## Layout
 
 - `packages/core` — SDK + engine + CLI: `contracts.ts` (single source of truth for all
-  cross-module types), `llm/`, `browser/`, `extract/`, `agent/`, `store/` (SQLite),
-  `runtime/` (run queue), `cli.ts` (bin `nanofish`: extract | agent | batch | runs).
+  cross-module types), `llm/`, `browser/`, `extract/`, `agent/`, `search/` (SearXNG
+  with browser-engine fallback), `fetch/` (URL→Markdown), `pdf/`, `profiles.ts` (login
+  profiles), `store/` (SQLite: runs, saved queries, profiles), `runtime/` (run queue),
+  `cli.ts` (bin `nanofish`: extract | agent | search | fetch | query | profile | batch | runs).
 - `apps/server` — Fastify API + WebSocket live view; serves the built UI in production.
 - `apps/ui` — React/Vite playground (author, run, watch agents). Playwright e2e in `e2e/`.
-- `apps/mcp` — MCP server (stdio): web_outline, web_extract, run_agent. Wired in `.mcp.json`.
+- `apps/mcp` — MCP server (stdio): web_outline, web_search, web_fetch, web_extract,
+  run_agent, run_saved_query. Wired in `.mcp.json`.
 - `examples/` — live verification scripts (`npx tsx examples/<name>.ts` from repo root).
 
 ## Commands
@@ -19,7 +22,7 @@ schema-validated JSON out. Full spec and decisions: see PROMPT.md and README.md.
 - `pnpm typecheck` / `pnpm lint` / `pnpm test` — run before considering work done
 - `pnpm build` — build all packages (core → ui → server → mcp)
 - `pnpm --filter @nanofish/ui e2e` — full-stack e2e (rebuilds, boots real server, one live LLM call)
-- CLI after build: `node packages/core/dist/cli.js <extract|agent|batch|runs> ...`
+- CLI after build: `node packages/core/dist/cli.js <extract|agent|search|fetch|query|profile|batch|runs> ...`
 
 ## Conventions
 

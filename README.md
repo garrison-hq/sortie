@@ -6,6 +6,7 @@ nanofish is a local-first platform for autonomous web agents. Describe the data 
 
 - **Semantic extraction** — pages are distilled into a compact, LLM-readable outline; data is located by meaning and validated against your schema.
 - **Multi-step agents** — goal in, browser actions out, structured output at the end. Credentials are referenced by name and never shown to the model.
+- **Research tools** — web search (SearXNG or a browser-engine fallback chain), URL → clean Markdown fetch with PDF support, saved replayable queries, and named login profiles.
 - **Reliability built in** — retries, per-domain rate limiting, self-healing element references, concurrent batch runs.
 - **Local-first** — CLI, typed SDK, REST/WebSocket server, playground UI, and an MCP server. No hosted dependency for the core loop.
 
@@ -62,7 +63,46 @@ SAUCE_PASSWORD=... nanofish agent https://www.saucedemo.com \
 
 **Credential security model:** `--cred NAME` (repeatable) exposes the value of environment variable `NAME` to the action executor only. The model never sees the value — prompts, goals, and traces contain only the `{{cred:NAME}}` placeholder; substitution happens at the moment of typing, and outgoing observations are scrubbed for raw credential values. Values are never printed or persisted.
 
-Other flags: `--max-steps <n>` (default 25), `--storage-state <path>` (reuse a Playwright storage-state JSON for logins), `--out <file>` (final output), `--trace <file>` (full step-by-step run trace), `--headful`.
+Other flags: `--max-steps <n>` (default 25), `--storage-state <path>` (reuse a Playwright storage-state JSON for logins), `--profile <name>` / `--save-profile <name>` (named login profiles, see [Login profiles](#login-profiles)), `--out <file>` (final output), `--trace <file>` (full step-by-step run trace), `--headful`.
+
+### `search` — web search
+
+```sh
+nanofish search "playwright storage state docs" --max-results 5
+```
+
+Returns ranked results (title, url, snippet) as JSON. Uses a SearXNG instance when `SEARXNG_BASE_URL` is set, otherwise drives real engines in a headless browser — see [Web search & fetch](#web-search--fetch). No LLM key needed. Flags: `--max-results <n>` (default 10, capped at 20), `--engine bing|duckduckgo|brave` (repeatable; order given = fallback order), `--out <file>`.
+
+### `fetch` — URL to clean Markdown
+
+```sh
+nanofish fetch https://en.wikipedia.org/wiki/Transformer_(deep_learning) > article.md
+nanofish fetch https://arxiv.org/pdf/1706.03762 --format text
+```
+
+Renders the page (JS included), strips boilerplate (nav, ads, footers), and prints main-content Markdown. PDF URLs are downloaded and converted with per-page markers. No LLM key needed. Flags: `--format markdown|text|json` (json = the full result object incl. `finalUrl`, `title`, `contentType`, `truncated`), `--max-chars <n>` (default 80000), `--out <file>`.
+
+### `query` — saved, replayable extractions
+
+```sh
+nanofish query save books --url https://books.toscrape.com --schema @schema.json
+nanofish query run books                                                  # replay as saved
+nanofish query run books --url https://books.toscrape.com/catalogue/page-2.html
+nanofish query save books2 --from-run 1f2e3d4c   # copy the spec of a past extract run
+nanofish query list | nanofish query show books | nanofish query delete books
+```
+
+`query run` goes through the run queue, so every replay is persisted as a normal run linked back to the query (`runs list`, `GET /api/runs?query=books`). See [Saved queries](#saved-queries).
+
+### `profile` — named login sessions
+
+```sh
+nanofish profile login github --url https://github.com/login   # headful: log in, press Enter
+nanofish extract https://github.com/notifications --profile github --schema @notif.json
+nanofish profile list | nanofish profile check github | nanofish profile delete github
+```
+
+`profile login` opens a visible browser; log in by hand, press Enter in the terminal, and the session (cookies + localStorage) is saved as a named profile. Use it via `--profile` on extract/agent (or the `"profile"` field of batch/REST specs — fetch included), or capture one from a successful agent login with `agent ... --save-profile <name>`. See [Login profiles](#login-profiles) for the security model.
 
 ### `batch` — run many specs concurrently
 
@@ -74,14 +114,16 @@ The specs file is either a `.json` array or a `.jsonl` file (one spec per line).
 
 ```jsonc
 {
-  "kind": "extract", // or "agent"
-  "url": "https://books.toscrape.com", // target URL (extract) / start URL (agent)
+  "kind": "extract", // or "agent" or "fetch"
+  "url": "https://books.toscrape.com", // target URL (extract/fetch) / start URL (agent)
   "schemaJson": { "type": "object", "...": "..." }, // required for extract
   "goal": "…", // required for agent
   "instruction": "…", // optional extraction hint
   "maxSteps": 15, // optional (agent)
+  "maxChars": 40000, // optional (fetch): markdown cap, default 40000
   "credentialNames": ["SHOP_PASSWORD"], // env var NAMES; values resolved at run time, never stored
   "storageStatePath": "…", // optional
+  "profile": "github", // optional named login profile (mutually exclusive with storageStatePath)
 }
 ```
 
@@ -96,6 +138,80 @@ nanofish runs export out.csv --batch <batch-id>
 ```
 
 Exports support `.json` and `.csv` (CSV flattens one row per run, or one row per array item when every output is an object with a single array field).
+
+## Web search & fetch
+
+nanofish can _discover_ pages as well as read them — available as `search`/`fetch` CLI commands, `search()`/`fetchPage()` SDK functions, `POST /api/search` / `POST /api/fetch` endpoints, and `web_search`/`web_fetch` MCP tools. The agent gets the same powers as tools: `search` (find pages without leaving the current one) and `read_page` (read the current page as Markdown without an LLM round-trip).
+
+**Search backends, in order:**
+
+1. **SearXNG (preferred)** — if `SEARXNG_BASE_URL` points at a [SearXNG](https://docs.searxng.org) instance, search hits its JSON API: structured results, no CAPTCHAs, no browser. The included compose profile spins one up next to nanofish:
+
+   ```sh
+   # 1. change secret_key in searxng/settings.yml (e.g. openssl rand -hex 32)
+   # 2. start nanofish together with searxng:
+   docker compose --profile search up -d --build
+   # 3. in .env: SEARXNG_BASE_URL=http://searxng:8080
+   ```
+
+   Bring-your-own instance works too — the only requirement is `json` in the `search.formats` list of its `settings.yml` (a 403 from the instance is the telltale sign it's missing).
+
+2. **Browser-engine fallback** — without SearXNG, nanofish drives real search engines in a headless browser, trying Bing → DuckDuckGo → Brave until one answers. In line with the project's scope rules, an engine that presents a CAPTCHA or anti-bot challenge is _skipped, never bypassed_; if every engine challenges, the search fails with a clear reason (and names `SEARXNG_BASE_URL` as the durable fix).
+
+**Fetch** turns any URL into clean, main-content Markdown: the page is rendered in the real browser (so JS-built content is included), boilerplate is stripped with a Readability pass, and the result is converted to GitHub-flavored Markdown. Neither search nor fetch needs an LLM key.
+
+### PDF support
+
+`fetch`, `extract`, and agent runs all work on PDF URLs (arXiv papers, reports, invoices). PDFs are detected three ways (`.pdf` URL, `application/pdf` content-type, or Chromium's aborted-navigation behavior), downloaded through the browser's request context (so cookies apply — authenticated PDFs work), and converted to text with `--- Page N ---` markers. Caps: 20 MB download, 100 pages, 200k chars; oversized documents are truncated with a flag, not failed. An agent that navigates to a PDF gets the text as an observation and can keep working from it.
+
+## Saved queries
+
+A saved query is a named, replayable extract spec — URL + schema + instruction stored once, run whenever you need fresh data:
+
+```sh
+nanofish query save books --url https://books.toscrape.com --schema @schema.json
+nanofish query run books                       # later, and again, and again
+nanofish query run books --url https://books.toscrape.com/catalogue/page-2.html
+```
+
+- Save a spec inline, or promote a past run that worked with `query save <name> --from-run <run-id>`.
+- Replays are real queue runs persisted to SQLite and linked back by name — filter history with `runs list` / `GET /api/runs?query=<name>`; the query tracks `lastRunAt` and `runCount`.
+- One-off overrides (`--url`, `--instruction`) apply to a single replay without touching the saved spec — ideal for running the same schema across many pages.
+- Available everywhere: CLI, REST (`/api/queries`, `POST /api/queries/:name/run`), the MCP `run_saved_query` tool, and the playground's **Queries** view (plus "Save as query" on any extract run).
+
+## Login profiles
+
+Many useful pages live behind a login. A profile is a named, locally stored browser session (Playwright storage state: cookies + localStorage) that any run can start from:
+
+```sh
+nanofish profile login github --url https://github.com/login    # log in by hand, press Enter
+nanofish extract https://github.com/notifications --profile github --schema @notif.json
+nanofish agent https://shop.example --goal "…" --cred SHOP_PASSWORD --save-profile shop
+```
+
+Create one by logging in manually in a headful browser (`profile login`), or capture the session from a successful agent login (`--save-profile`). `profile list` / `profile check` show a staleness summary (cookie counts, domains, earliest expiry) so you know when to re-login.
+
+**Security model:** profile state lives only on disk at `<dataDir>/profiles/<name>.json` (directory `0700`, file `0600`) — never in the database, never in logs or prompts, and never returned by the API. Profile names are slug-gated (`a-z0-9_-`) as a path-traversal defense, and `--profile` is mutually exclusive with `--storage-state` so there's no silent precedence.
+
+**Profiles on a remote/Docker host:** sessions are created interactively, so bootstrap a headless server from a machine with a display:
+
+```sh
+# Option A — import over the API (write-only: the server stores the file 0600
+# and responds with metadata + cookie summary only, never the state itself):
+nanofish profile login shop --url https://shop.example     # locally
+curl -X POST http://your-host:3470/api/profiles/import \
+  -H 'content-type: application/json' \
+  -d "{\"name\":\"shop\",\"state\":$(cat data/profiles/shop.json)}"
+
+# Option B — docker cp fallback (no API call): copy the storage-state file
+# into the data volume and reference it per-run via "storageStatePath"
+# (named profiles need the registration step that import performs):
+docker compose cp data/profiles/shop.json nanofish:/data/shop-state.json
+docker compose exec nanofish chmod 600 /data/shop-state.json
+# then in run/batch specs: "storageStatePath": "/data/shop-state.json"
+```
+
+> **Warning:** the import request body carries live session cookies, and the nanofish API has no authentication — like the rest of the API, `/api/profiles/import` is meant for trusted networks only (localhost, VPN, or behind your own authenticating reverse proxy). Never expose the server to the open internet.
 
 ## Programmatic SDK
 
@@ -141,11 +257,16 @@ Also exported: `createProvider()` (env-driven provider construction with overrid
 
 `apps/mcp` exposes nanofish over the Model Context Protocol (stdio), so any MCP-capable agent — Claude Code included — can use the web like an API:
 
-| Tool          | What it does                                                                              |
-| ------------- | ----------------------------------------------------------------------------------------- |
-| `web_outline` | Distill a URL into title + interactive-element outline + visible text. No LLM key needed. |
-| `web_extract` | Schema-grounded semantic extraction from a URL (uses the configured provider).            |
-| `run_agent`   | Multi-step browser agent: goal + startUrl in, schema-validated output out.                |
+| Tool              | What it does                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| `web_outline`     | Distill a URL into title + interactive-element outline + visible text. No LLM key needed.  |
+| `web_search`      | Web search via SearXNG or the browser-engine fallback chain. No LLM key needed.            |
+| `web_fetch`       | Fetch a URL — HTML or PDF — as clean main-content Markdown. No LLM key needed.             |
+| `web_extract`     | Schema-grounded semantic extraction from a URL (uses the configured provider).             |
+| `run_agent`       | Multi-step browser agent: goal + startUrl in, schema-validated output out.                 |
+| `run_saved_query` | Replay a saved query by name (optional URL/instruction override); persisted as a real run. |
+
+`web_extract` and `run_agent` also accept a `profile` parameter to start from a saved login session (see [Login profiles](#login-profiles)).
 
 Wire it up in `.mcp.json` (already present at the repo root):
 
@@ -164,12 +285,12 @@ For `run_agent` credentials, prefer `env:` references — `{"PASSWORD": "env:SHO
 
 ## Playground UI
 
-The React playground (`apps/ui`) lets you author an extract or agent run, submit it, and watch it execute: live step stream over WebSocket, per-step screenshots, run history, full run detail with the recorded trace, and JSON/CSV export.
+The React playground (`apps/ui`) lets you author an extract or agent run, submit it, and watch it execute: live step stream over WebSocket, per-step screenshots, run history, full run detail with the recorded trace, and JSON/CSV export. The **Queries** view lists saved queries and runs them (optionally against an override URL); the **Profiles** view shows login profiles with a staleness badge. Any extract run can be promoted with "Save as query".
 
 - **Production:** `pnpm build && pnpm dev` — the server serves the built UI at `http://localhost:3470`.
 - **UI development:** run `pnpm dev` (API server on :3470) and `pnpm dev:ui` (Vite dev server with hot reload, proxying `/api` to :3470) side by side.
 
-The server also works headless as a pure JSON API: `POST /api/runs`, `POST /api/batches`, `GET /api/runs[/:id]`, `GET /api/export?format=json|csv`, and `GET /api/events` (WebSocket event stream).
+The server also works headless as a pure JSON API: `POST /api/runs`, `POST /api/batches`, `GET /api/runs[/:id]` (with `?query=<name>` filtering), `GET /api/export?format=json|csv`, `GET /api/events` (WebSocket event stream), synchronous `POST /api/search` and `POST /api/fetch`, saved-query CRUD under `/api/queries` (+ `POST /api/queries/:name/run`), and profile management under `/api/profiles` (list/delete/import — state contents are never returned).
 
 ## Docker
 
@@ -181,8 +302,9 @@ docker compose up -d --build
 ```
 
 - The UI/API listens on port `3470`.
-- All state (SQLite database, screenshots, exports) lives in the `nanofish-data` named volume, mounted at `/data` (`NANOFISH_DATA_DIR=/data`).
+- All state (SQLite database, screenshots, exports, profile storage states) lives in the `nanofish-data` named volume, mounted at `/data` (`NANOFISH_DATA_DIR=/data`).
 - `.env` is supplied through `env_file` and is never baked into the image. Keep it out of version control.
+- `docker compose --profile search up -d` additionally starts a SearXNG sidecar as the search backend — see [Web search & fetch](#web-search--fetch).
 
 ## Architecture
 
@@ -192,7 +314,10 @@ packages/core          the engine + SDK + CLI (contracts.ts is the single source
   browser/             Playwright manager + page distillation (refs, outline, text)
   extract/             semantic extraction: snapshot + schema -> validated JSON
   agent/               multi-step loop: tools, prompts, credential substitution
-  store/               SQLite persistence: runs, steps, JSON/CSV export
+  search/              web search: SearXNG client + browser-engine fallback chain
+  fetch/               URL -> clean main-content Markdown (Readability + turndown)
+  pdf/                 PDF download + text extraction (page markers, size caps)
+  store/               SQLite persistence: runs, steps, saved queries, profiles, JSON/CSV export
   runtime/             in-process run queue: worker pool, rate limiting, retries
 apps/server            Fastify REST + WebSocket; serves the built UI in production
 apps/ui                React/Vite playground
