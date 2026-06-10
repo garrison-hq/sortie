@@ -92,6 +92,9 @@ export interface DistilledElement {
   value?: string;
   checked?: boolean;
   disabled?: boolean;
+  /** Inside an open dialog/modal or fixed high-z-index layer (cookie banner,
+   * popup) — surfaced first in the outline so truncation never hides it. */
+  overlay?: boolean;
 }
 
 export interface PageSnapshot {

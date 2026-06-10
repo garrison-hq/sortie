@@ -40,6 +40,7 @@ interface MinimalStyle {
   visibility: string;
   display: string;
   position: string;
+  zIndex?: string;
 }
 interface MinimalElement {
   tagName: string;
@@ -47,6 +48,10 @@ interface MinimalElement {
   setAttribute(name: string, value: string): void;
   removeAttribute(name: string): void;
   getBoundingClientRect(): MinimalRect;
+  matches(selector: string): boolean;
+  shadowRoot?: MinimalShadowRoot | null;
+  parentElement?: MinimalElement | null;
+  getRootNode?(): { host?: MinimalElement | null } | undefined;
   offsetParent?: unknown;
   innerText?: string;
   href?: string;
@@ -58,6 +63,9 @@ interface MinimalElement {
 interface MinimalNodeList {
   length: number;
   [index: number]: MinimalElement | undefined;
+}
+interface MinimalShadowRoot {
+  querySelectorAll(selector: string): MinimalNodeList;
 }
 interface MinimalDocument {
   querySelectorAll(selector: string): MinimalNodeList;
@@ -93,12 +101,24 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
       const TEXT_LIMIT = 12000;
       const MARKER = '...[truncated]';
 
-      // (1) Remove stale refs from any previous distill.
-      const stale = doc.querySelectorAll('[data-nf-ref]');
-      for (let i = 0; i < stale.length; i++) {
-        const el = stale[i];
-        if (el) el.removeAttribute('data-nf-ref');
-      }
+      // (1+2 prep) Deep walk: document order, descending into open shadow
+      // roots (consent banners and design-system widgets often live there;
+      // Playwright locators pierce shadow DOM, so refs stay clickable).
+      // Also strips stale refs from a previous distill in the same pass.
+      const collectDeep = (
+        root: MinimalDocument | MinimalShadowRoot,
+        selector: string,
+        out: MinimalElement[],
+      ): void => {
+        const all = root.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (!el) continue;
+          if (el.getAttribute('data-nf-ref') !== null) el.removeAttribute('data-nf-ref');
+          if (el.matches(selector)) out.push(el);
+          if (el.shadowRoot) collectDeep(el.shadowRoot, selector, out);
+        }
+      };
 
       // (2) Select interactive elements + structural landmarks, in document
       // order (querySelectorAll guarantees order and dedupes).
@@ -126,7 +146,8 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         '[role="navigation"]',
         '[role="main"]',
       ].join(', ');
-      const candidates = doc.querySelectorAll(selector);
+      const candidates: MinimalElement[] = [];
+      collectDeep(doc, selector, candidates);
 
       // (3) Visibility: skip hidden / zero-sized / detached-from-layout
       // elements, except position:fixed (offsetParent is null for those).
@@ -137,6 +158,28 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         if (rect.width === 0 && rect.height === 0) return false;
         if (el.offsetParent === null && style.position !== 'fixed') return false;
         return true;
+      };
+
+      // Overlay detection: an element inside an open dialog/modal or a
+      // fixed-position high-z-index layer (cookie banners, popups). These are
+      // surfaced FIRST in the outline so truncation never hides them — when a
+      // modal is open it is usually the only actionable thing on the page.
+      const isOverlay = (el: MinimalElement): boolean => {
+        let node: MinimalElement | null | undefined = el;
+        let depth = 0;
+        while (node && depth < 50) {
+          const role = node.getAttribute('role');
+          if (role === 'dialog' || role === 'alertdialog') return true;
+          if (node.getAttribute('aria-modal') === 'true') return true;
+          if (node.tagName.toLowerCase() === 'dialog') return true;
+          const style = win.getComputedStyle(node);
+          const z = Number(style.zIndex);
+          if (style.position === 'fixed' && Number.isFinite(z) && z >= 10) return true;
+          node =
+            node.parentElement ?? (node.getRootNode ? (node.getRootNode()?.host ?? null) : null);
+          depth += 1;
+        }
+        return false;
       };
 
       const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
@@ -188,6 +231,7 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         value?: string;
         checked?: boolean;
         disabled?: boolean;
+        overlay?: boolean;
       }> = [];
       let counter = 0;
 
@@ -235,6 +279,9 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') {
           entry.disabled = true;
         }
+        if (isOverlay(el)) {
+          entry.overlay = true;
+        }
 
         elements.push(entry);
       }
@@ -275,9 +322,23 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
  * Pure function (no browser needed); exported for direct testing.
  */
 export function buildOutline(elements: DistilledElement[]): string {
-  let outline = '';
+  const overlayLines: string[] = [];
+  const pageLines: string[] = [];
   for (const el of elements) {
-    const line = formatOutlineLine(el);
+    (el.overlay ? overlayLines : pageLines).push(formatOutlineLine(el));
+  }
+  // Overlay/dialog elements first: they usually block the page, and putting
+  // them up front guarantees the outline cap can never truncate them away.
+  const lines = overlayLines.length
+    ? [
+        '--- overlay / dialog elements (these may block the page; deal with them first) ---',
+        ...overlayLines,
+        '--- main page elements ---',
+        ...pageLines,
+      ]
+    : pageLines;
+  let outline = '';
+  for (const line of lines) {
     const next = outline ? `${outline}\n${line}` : line;
     if (next.length > OUTLINE_MAX) {
       return `${outline}\n${TRUNCATION_MARKER}`;

@@ -90,6 +90,8 @@ interface FakeElement {
   setAttribute(name: string, value: string): void;
   removeAttribute(name: string): void;
   getBoundingClientRect(): { width: number; height: number };
+  matches(selector: string): boolean;
+  shadowRoot: null;
   offsetParent: unknown;
   innerText: string;
   value?: string;
@@ -103,6 +105,9 @@ function makeFakeElement(init: FakeElementInit): FakeElement {
     setAttribute: (name, value) => void attrs.set(name, value),
     removeAttribute: (name) => void attrs.delete(name),
     getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    // Every fake is a candidate, mirroring the pre-shadow-DOM fixture shape.
+    matches: () => true,
+    shadowRoot: null,
     offsetParent: {},
     innerText: init.text ?? '',
   };
