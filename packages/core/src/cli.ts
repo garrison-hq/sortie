@@ -547,6 +547,9 @@ function formatRunEvent(ev: RunEvent): string {
     case 'run-step':
       // StepRecord.index is 0-based; display 1-based for humans.
       return ev.step ? `[${id}] step ${ev.step.index + 1} ${ev.step.action.tool}\n` : '';
+    case 'run-screenshot':
+      // Screenshots are a live-view concern; keep CLI progress output quiet.
+      return '';
     case 'run-finished': {
       const record = ev.record;
       const seconds =

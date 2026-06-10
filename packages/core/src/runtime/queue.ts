@@ -15,6 +15,9 @@
  * ever appear in records, events, or failure reasons.
  */
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { Page } from 'playwright';
 import type {
   LlmProvider,
   QueueOptions,
@@ -37,6 +40,12 @@ const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 10;
 const DEFAULT_PER_DOMAIN_INTERVAL_MS = 1000;
 const DEFAULT_MAX_RETRIES = 2;
+const SCREENSHOT_TIMEOUT_MS = 5000;
+const SCREENSHOT_JPEG_QUALITY = 55;
+
+function defaultScreenshotDir(): string {
+  return (process.env.NANOFISH_DATA_DIR ?? './data') + '/screenshots';
+}
 
 /** What a single execution attempt settles to (or it throws: infra error). */
 export interface ExecuteRunOutcome {
@@ -58,10 +67,76 @@ export type ExecuteRunFn = (
     provider: LlmProvider;
     manager: BrowserManager;
     onStep: (step: StepRecord) => void;
+    /**
+     * Best-effort per-step screenshot capture (no-op when disabled). Captures
+     * are serialized per run and never affect the run outcome; the queue emits
+     * a 'run-screenshot' event once the JPEG is on disk. `flush` (never
+     * rejects) lets the executor let in-flight captures land before it tears
+     * the page down.
+     */
+    screenshots: { capture(page: Page, stepIndex: number): void; flush(): Promise<void> };
   },
 ) => Promise<ExecuteRunOutcome>;
 
 type ExecuteRunCtx = Parameters<ExecuteRunFn>[1];
+
+/**
+ * Per-run screenshot pipeline. Captures are chained so they never interleave
+ * (the JPEG for step N is always taken before the one for step N+1), but the
+ * chain is fire-and-forget from the executor's perspective: a failed capture
+ * (page closed, navigation in flight, timeout) is swallowed and never fails
+ * or delays the run outcome. The queue awaits `flush()` before emitting
+ * 'run-finished' so the final screenshot exists when consumers react to it.
+ */
+interface ScreenshotSink {
+  capture(page: Page, stepIndex: number): void;
+  /** Resolves when all queued captures have settled; never rejects. */
+  flush(): Promise<void>;
+}
+
+const noopScreenshotSink: ScreenshotSink = {
+  capture() {},
+  flush: () => Promise.resolve(),
+};
+
+function createScreenshotSink(args: {
+  runId: string;
+  batchId?: string;
+  dir: string;
+  emit: (ev: RunEvent) => void;
+}): ScreenshotSink {
+  const runDir = join(args.dir, args.runId);
+  /** mkdir -p happens once per run, lazily on the first capture. */
+  let dirReady: Promise<unknown> | undefined;
+  let chain: Promise<void> = Promise.resolve();
+
+  return {
+    capture(page: Page, stepIndex: number): void {
+      chain = chain.then(async () => {
+        try {
+          dirReady ??= mkdir(runDir, { recursive: true });
+          await dirReady;
+          const path = join(runDir, `${stepIndex}.jpg`);
+          await page.screenshot({
+            type: 'jpeg',
+            quality: SCREENSHOT_JPEG_QUALITY,
+            timeout: SCREENSHOT_TIMEOUT_MS,
+            path,
+          });
+          args.emit({
+            type: 'run-screenshot',
+            runId: args.runId,
+            batchId: args.batchId,
+            screenshot: { stepIndex, path },
+          });
+        } catch {
+          // Best-effort by design: screenshots must never affect correctness.
+        }
+      });
+    },
+    flush: () => chain,
+  };
+}
 
 /** Internal queue entry; `attempts` counts execution attempts so far. */
 interface QueueItem {
@@ -87,6 +162,8 @@ export function createRunQueue(
   );
   const perDomainIntervalMs = opts?.perDomainIntervalMs ?? DEFAULT_PER_DOMAIN_INTERVAL_MS;
   const maxRetries = opts?.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const screenshotsEnabled = opts?.screenshots?.enabled ?? true;
+  const screenshotsDir = opts?.screenshots?.dir ?? defaultScreenshotDir();
   const exec = executeRun ?? defaultExecuteRun;
 
   const manager = new BrowserManager();
@@ -207,6 +284,11 @@ export function createRunQueue(
       emit({ type: 'run-step', runId: item.id, batchId: item.batchId, step });
     };
 
+    // Fresh sink per attempt: a retry re-captures into the same paths.
+    const screenshots = screenshotsEnabled
+      ? createScreenshotSink({ runId: item.id, batchId: item.batchId, dir: screenshotsDir, emit })
+      : noopScreenshotSink;
+
     try {
       const started = store.updateRun(item.id, {
         status: 'running',
@@ -221,13 +303,18 @@ export function createRunQueue(
       const ctx: ExecuteRunCtx = {
         manager,
         onStep,
+        screenshots,
         get provider(): LlmProvider {
           return getProvider();
         },
       };
       const outcome = await exec(item.spec, ctx);
+      // In-flight captures must land before 'run-finished' so the final
+      // screenshot exists when consumers react to completion.
+      await screenshots.flush();
       finishRun(item, outcome);
     } catch (err) {
+      await screenshots.flush();
       const message = err instanceof Error ? err.message : String(err);
       if (item.attempts <= maxRetries && !shuttingDown) {
         // Infrastructure error with retry budget left: back to the queue tail.
@@ -348,6 +435,8 @@ async function executeExtract(spec: RunSpec, ctx: ExecuteRunCtx): Promise<Execut
   const page = await ctx.manager.newPage({ storageStatePath: spec.storageStatePath });
   try {
     await navigateAndSettle(page, spec.url);
+    // Single screenshot per extract run: the settled page, as step 0.
+    ctx.screenshots.capture(page, 0);
     const result = await extract({
       page,
       schema,
@@ -361,6 +450,8 @@ async function executeExtract(spec: RunSpec, ctx: ExecuteRunCtx): Promise<Execut
       finalUrl: result.url,
     };
   } finally {
+    // Let in-flight captures land while the page is still alive.
+    await ctx.screenshots.flush();
     await page
       .context()
       .close()
@@ -400,7 +491,12 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
       page,
       provider: ctx.provider,
       credentials,
-      onStep: ctx.onStep,
+      onStep: (step) => {
+        ctx.onStep(step);
+        // Queue the capture after the step event so 'run-screenshot' always
+        // follows the corresponding 'run-step'.
+        ctx.screenshots.capture(page, step.index);
+      },
     });
     return {
       status: result.status,
@@ -410,6 +506,8 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
       finalUrl: result.finalUrl,
     };
   } finally {
+    // Let in-flight captures land while the page is still alive.
+    await ctx.screenshots.flush();
     await page
       .context()
       .close()

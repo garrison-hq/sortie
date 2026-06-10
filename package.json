@@ -15,8 +15,9 @@
     ]
   },
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm --filter @nanofish/core build && pnpm --filter @nanofish/ui build && pnpm --filter @nanofish/server build && pnpm --filter @nanofish/mcp build",
     "dev": "pnpm --filter @nanofish/server dev",
+    "dev:ui": "pnpm --filter @nanofish/ui dev",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -27,6 +28,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.9.2",
     "eslint": "^10.4.1",
+    "globals": "^17.6.0",
     "prettier": "^3.8.4",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",

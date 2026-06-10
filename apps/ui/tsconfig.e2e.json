@@ -1,0 +1,24 @@
+{
+  // Typecheck-only config for the Playwright E2E suite: these files run in
+  // Node (Playwright's runner), not the Vite browser bundle, so they get
+  // node types; DOM lib stays on for page.evaluate callbacks.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}

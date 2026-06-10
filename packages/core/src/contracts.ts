@@ -252,13 +252,15 @@ export interface RunStore {
 }
 
 export interface RunEvent {
-  type: 'run-queued' | 'run-started' | 'run-step' | 'run-finished';
+  type: 'run-queued' | 'run-started' | 'run-step' | 'run-screenshot' | 'run-finished';
   runId: string;
   batchId?: string;
   /** Present on run-step. */
   step?: StepRecord;
   /** Present on run-queued/run-started/run-finished. */
   record?: RunRecord;
+  /** Present on run-screenshot: JPEG saved to disk for live view + replay. */
+  screenshot?: { stepIndex: number; path: string };
 }
 
 export interface QueueOptions {
@@ -270,6 +272,9 @@ export interface QueueOptions {
    * agent-reported 'failed' outcomes. Default 2. */
   maxRetries?: number;
   provider?: LlmProvider;
+  /** Per-step JPEG screenshots for live view + replay. Default enabled;
+   * stored under `dir` (default $NANOFISH_DATA_DIR/screenshots/<runId>/). */
+  screenshots?: { enabled?: boolean; dir?: string };
 }
 
 /** In-process run queue executing RunSpecs against a worker pool. */

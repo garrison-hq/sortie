@@ -7,3 +7,6 @@ data/
 .vite/
 coverage/
 .codegraph/
+apps/ui/e2e-artifacts/
+apps/ui/test-results/
+apps/ui/playwright-report/
