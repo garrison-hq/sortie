@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { parseListQuery, readQueryParam, toRunSpec, validateRunSpec } from './validate.js';
+import {
+  parseListQuery,
+  readQueryParam,
+  toQueryRunOverrides,
+  toRunSpec,
+  validateFetchBody,
+  validateProfileImportBody,
+  validateQueryBody,
+  validateQueryRunBody,
+  validateRunSpec,
+  validateSearchBody,
+} from './validate.js';
 
 describe('validateRunSpec', () => {
   it('accepts a minimal extract spec', () => {
@@ -32,9 +43,15 @@ describe('validateRunSpec', () => {
     expect(validateRunSpec('extract')).toEqual(['spec must be a JSON object']);
   });
 
+  it('accepts a fetch spec without schemaJson or goal', () => {
+    expect(
+      validateRunSpec({ kind: 'fetch', url: 'https://example.com', maxChars: 10_000 }),
+    ).toEqual([]);
+  });
+
   it('rejects an unknown kind and a missing url', () => {
     const errors = validateRunSpec({ kind: 'bogus' });
-    expect(errors).toContain('kind must be "extract" or "agent" (got "bogus")');
+    expect(errors).toContain('kind must be one of extract|agent|fetch (got "bogus")');
     expect(errors).toContain('url must be a non-empty string');
   });
 
@@ -67,6 +84,51 @@ describe('validateRunSpec', () => {
     expect(errors).toContain('instruction must be a string when present');
     expect(errors).toContain('storageStatePath must be a string when present');
   });
+
+  it('accepts a valid profile slug', () => {
+    expect(
+      validateRunSpec({
+        kind: 'agent',
+        url: 'https://www.saucedemo.com/inventory.html',
+        goal: 'list inventory',
+        profile: 'sauce',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects non-slug profiles (path-traversal defense)', () => {
+    for (const profile of ['../etc/passwd', 'Sauce', 'a b', '']) {
+      expect(
+        validateRunSpec({ kind: 'agent', url: 'https://x.test', goal: 'go', profile }),
+      ).toEqual(['profile must be a slug ([a-z0-9][a-z0-9_-]{0,63}) when present']);
+    }
+  });
+
+  it('rejects profile + storageStatePath together', () => {
+    const errors = validateRunSpec({
+      kind: 'agent',
+      url: 'https://x.test',
+      goal: 'go',
+      profile: 'sauce',
+      storageStatePath: '/tmp/state.json',
+    });
+    expect(errors).toEqual([
+      'profile and storageStatePath are mutually exclusive — set one or the other',
+    ]);
+  });
+
+  it('rejects bad queryName and maxChars', () => {
+    const errors = validateRunSpec({
+      kind: 'fetch',
+      url: 'https://x.test',
+      queryName: 42,
+      maxChars: -1,
+    });
+    expect(errors).toEqual([
+      'queryName must be a string when present',
+      'maxChars must be a positive integer when present',
+    ]);
+  });
 });
 
 describe('toRunSpec', () => {
@@ -90,6 +152,23 @@ describe('toRunSpec', () => {
   it('omits optional fields that are absent or mistyped', () => {
     const spec = toRunSpec({ kind: 'agent', url: 'https://example.com', goal: 'go' });
     expect(Object.keys(spec).sort()).toEqual(['goal', 'kind', 'url']);
+  });
+
+  it('copies profile, queryName, and maxChars', () => {
+    const spec = toRunSpec({
+      kind: 'fetch',
+      url: 'https://example.com',
+      profile: 'sauce',
+      queryName: 'books',
+      maxChars: 5000,
+    });
+    expect(spec).toEqual({
+      kind: 'fetch',
+      url: 'https://example.com',
+      profile: 'sauce',
+      queryName: 'books',
+      maxChars: 5000,
+    });
   });
 });
 
@@ -118,9 +197,16 @@ describe('parseListQuery', () => {
       offset: '40',
       status: 'success',
       batch: 'batch-1',
+      query: 'books',
     });
     expect(errors).toEqual([]);
-    expect(opts).toEqual({ limit: 20, offset: 40, status: 'success', batchId: 'batch-1' });
+    expect(opts).toEqual({
+      limit: 20,
+      offset: 40,
+      status: 'success',
+      batchId: 'batch-1',
+      queryName: 'books',
+    });
   });
 
   it('returns empty options for an empty query', () => {
@@ -133,6 +219,154 @@ describe('parseListQuery', () => {
       'limit must be a positive integer',
       'offset must be a non-negative integer',
       'status must be one of queued|running|success|failed|max_steps|cancelled',
+    ]);
+  });
+});
+
+describe('validateQueryBody', () => {
+  const extractSpec = {
+    kind: 'extract',
+    url: 'https://books.toscrape.com',
+    schemaJson: { type: 'object' },
+  };
+
+  it('accepts a valid {name, spec} body', () => {
+    expect(validateQueryBody({ name: 'books', spec: extractSpec })).toEqual([]);
+  });
+
+  it('skips the name check when the name comes from the path', () => {
+    expect(validateQueryBody({ spec: extractSpec }, true)).toEqual([]);
+  });
+
+  it('rejects non-object bodies, non-slug names, and missing specs', () => {
+    expect(validateQueryBody(null)).toEqual(['body must be a JSON object']);
+    expect(validateQueryBody({ name: '../oops', spec: extractSpec })).toEqual([
+      'name must be a slug ([a-z0-9][a-z0-9_-]{0,63})',
+    ]);
+    expect(validateQueryBody({ name: 'books' })).toEqual(['spec must be a JSON object']);
+  });
+
+  it('rejects non-extract specs and surfaces nested spec problems', () => {
+    expect(
+      validateQueryBody({ name: 'go', spec: { kind: 'agent', url: 'https://x.test', goal: 'go' } }),
+    ).toEqual(['spec: only extract specs can be saved as queries']);
+    expect(validateQueryBody({ name: 'books', spec: { ...extractSpec, url: '' } })).toEqual([
+      'spec: url must be a non-empty string',
+    ]);
+  });
+});
+
+describe('validateQueryRunBody / toQueryRunOverrides', () => {
+  it('accepts an absent or empty body', () => {
+    expect(validateQueryRunBody(undefined)).toEqual([]);
+    expect(validateQueryRunBody(null)).toEqual([]);
+    expect(validateQueryRunBody({})).toEqual([]);
+  });
+
+  it('accepts url and instruction overrides', () => {
+    expect(
+      validateQueryRunBody({ url: 'https://books.toscrape.com/page-2.html', instruction: 'x' }),
+    ).toEqual([]);
+  });
+
+  it('rejects non-object bodies and mistyped overrides', () => {
+    expect(validateQueryRunBody('books')).toEqual(['body must be a JSON object when present']);
+    expect(validateQueryRunBody({ url: ' ', instruction: 7 })).toEqual([
+      'url must be a non-empty string when present',
+      'instruction must be a string when present',
+    ]);
+  });
+
+  it('builds overrides from validated bodies only', () => {
+    expect(toQueryRunOverrides(undefined)).toEqual({});
+    expect(toQueryRunOverrides({ url: 'https://x.test', instruction: 'y', junk: 1 })).toEqual({
+      url: 'https://x.test',
+      instruction: 'y',
+    });
+  });
+});
+
+describe('validateProfileImportBody', () => {
+  const state = {
+    cookies: [{ name: 'session', value: 's3cret', domain: '.saucedemo.com', expires: -1 }],
+    origins: [],
+  };
+
+  it('accepts a valid import body', () => {
+    expect(
+      validateProfileImportBody({ name: 'sauce', state, domainHint: 'saucedemo.com', notes: 'n' }),
+    ).toEqual([]);
+  });
+
+  it('accepts a state without cookies', () => {
+    expect(validateProfileImportBody({ name: 'sauce', state: { origins: [] } })).toEqual([]);
+  });
+
+  it('rejects non-slug names and malformed state', () => {
+    expect(validateProfileImportBody(null)).toEqual(['body must be a JSON object']);
+    expect(validateProfileImportBody({ name: '../sauce', state })).toEqual([
+      'name must be a slug ([a-z0-9][a-z0-9_-]{0,63})',
+    ]);
+    expect(validateProfileImportBody({ name: 'sauce', state: 'cookies' })).toEqual([
+      'state must be a Playwright storage-state JSON object',
+    ]);
+    expect(validateProfileImportBody({ name: 'sauce', state: { cookies: [{}] } })).toEqual([
+      'state.cookies must be an array of cookie objects (domain, expires)',
+    ]);
+  });
+
+  it('rejects mistyped domainHint and notes', () => {
+    expect(validateProfileImportBody({ name: 'sauce', state, domainHint: 1, notes: [] })).toEqual([
+      'domainHint must be a string when present',
+      'notes must be a string when present',
+    ]);
+  });
+});
+
+describe('validateSearchBody', () => {
+  it('accepts a minimal and a full body', () => {
+    expect(validateSearchBody({ query: 'attention is all you need' })).toEqual([]);
+    expect(
+      validateSearchBody({ query: 'x', maxResults: 5, engines: ['bing', 'duckduckgo'] }),
+    ).toEqual([]);
+  });
+
+  it('rejects missing query, bad maxResults, and unknown engines', () => {
+    expect(validateSearchBody(null)).toEqual(['body must be a JSON object']);
+    expect(validateSearchBody({ query: '  ' })).toEqual(['query must be a non-empty string']);
+    expect(validateSearchBody({ query: 'x', maxResults: 0, engines: ['google'] })).toEqual([
+      'maxResults must be a positive integer when present',
+      'engines must be a non-empty array of bing|duckduckgo|brave when present',
+    ]);
+    expect(validateSearchBody({ query: 'x', engines: [] })).toEqual([
+      'engines must be a non-empty array of bing|duckduckgo|brave when present',
+    ]);
+  });
+});
+
+describe('validateFetchBody', () => {
+  it('accepts a minimal and a full body', () => {
+    expect(validateFetchBody({ url: 'https://example.com' })).toEqual([]);
+    expect(
+      validateFetchBody({ url: 'https://example.com', maxChars: 10_000, includeLinks: true }),
+    ).toEqual([]);
+  });
+
+  it('rejects missing url, bad maxChars, and mistyped includeLinks', () => {
+    expect(validateFetchBody(null)).toEqual(['body must be a JSON object']);
+    expect(validateFetchBody({ url: '', maxChars: 1.5, includeLinks: 'yes' })).toEqual([
+      'url must be a non-empty string',
+      'maxChars must be a positive integer when present',
+      'includeLinks must be a boolean when present',
+    ]);
+  });
+
+  it('rejects non-absolute and non-http(s) urls', () => {
+    expect(validateFetchBody({ url: 'not-a-url' })).toEqual([
+      'url must be an absolute http(s) URL',
+    ]);
+    expect(validateFetchBody({ url: 'ftp://example.com/file' })).toEqual([
+      'url must be an absolute http(s) URL',
     ]);
   });
 });

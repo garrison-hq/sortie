@@ -5,17 +5,36 @@
  * strings are validated manually (see validate.ts) and rejected with clear
  * 400s; unknown resources answer 404 {error}.
  */
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { VERSION } from '@nanofish/core';
-import type { RunQueue, RunStore } from '@nanofish/core';
+import {
+  VERSION,
+  fetchPage,
+  isSlug,
+  prepareSavedQueryRun,
+  search,
+  summarizeProfileState,
+} from '@nanofish/core';
+import type {
+  ProfileStateSummary,
+  RunQueue,
+  RunSpec,
+  RunStore,
+  SearchEngineId,
+} from '@nanofish/core';
 import {
   isRecord,
   parseListQuery,
   readQueryParam,
+  toQueryRunOverrides,
   toRunSpec,
+  validateFetchBody,
+  validateProfileImportBody,
+  validateQueryBody,
+  validateQueryRunBody,
   validateRunSpec,
+  validateSearchBody,
 } from './validate.js';
 
 const MAX_BATCH_SPECS = 100;
@@ -33,6 +52,7 @@ export interface RouteDeps {
 
 type Query = Record<string, unknown>;
 type IdParams = { Params: { id: string } };
+type NameParams = { Params: { name: string } };
 
 export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { store, queue, dataDir } = deps;
@@ -49,7 +69,10 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (problems.length > 0) {
       return badRequest(reply, 'Invalid run spec.', problems);
     }
-    const record = queue.submit(toRunSpec(body['spec'] as Record<string, unknown>));
+    const spec = toRunSpec(body['spec'] as Record<string, unknown>);
+    const profileProblem = unknownProfileProblem(store, spec);
+    if (profileProblem) return badRequest(reply, profileProblem);
+    const record = queue.submit(spec);
     return reply.code(201).send(record);
   });
 
@@ -74,9 +97,15 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (problems.length > 0) {
       return badRequest(reply, 'Invalid run specs.', problems);
     }
-    const result = queue.submitBatch(
-      specs.map((spec) => toRunSpec(spec as Record<string, unknown>)),
-    );
+    const runSpecs = specs.map((spec) => toRunSpec(spec as Record<string, unknown>));
+    runSpecs.forEach((spec, i) => {
+      const problem = unknownProfileProblem(store, spec);
+      if (problem) problems.push(`specs[${i}]: ${problem}`);
+    });
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid run specs.', problems);
+    }
+    const result = queue.submitBatch(runSpecs);
     return reply.code(201).send(result);
   });
 
@@ -86,7 +115,11 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return badRequest(reply, 'Invalid query parameters.', errors);
     }
     const runs = store.listRuns(opts);
-    const total = store.countRuns({ batchId: opts.batchId, status: opts.status });
+    const total = store.countRuns({
+      batchId: opts.batchId,
+      status: opts.status,
+      queryName: opts.queryName,
+    });
     return { runs, total };
   });
 
@@ -146,6 +179,165 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       .header('content-disposition', `attachment; filename="export.${format}"`)
       .send(body);
   });
+
+  // --- Web search & fetch (synchronous one-shots, no run record) -----------
+
+  app.post('/api/search', async (req, reply) => {
+    const problems = validateSearchBody(req.body);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid search request.', problems);
+    }
+    const body = req.body as Record<string, unknown>;
+    try {
+      return await search(body['query'] as string, {
+        maxResults: body['maxResults'] as number | undefined,
+        engines: body['engines'] as SearchEngineId[] | undefined,
+      });
+    } catch (err) {
+      return badGateway(reply, errorMessage(err));
+    }
+  });
+
+  app.post('/api/fetch', async (req, reply) => {
+    const problems = validateFetchBody(req.body);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid fetch request.', problems);
+    }
+    const body = req.body as Record<string, unknown>;
+    try {
+      return await fetchPage({
+        url: body['url'] as string,
+        maxChars: body['maxChars'] as number | undefined,
+        includeLinks: body['includeLinks'] as boolean | undefined,
+      });
+    } catch (err) {
+      return badGateway(reply, errorMessage(err));
+    }
+  });
+
+  // --- Saved queries --------------------------------------------------------
+
+  app.get('/api/queries', async () => ({ queries: store.listQueries() }));
+
+  app.post('/api/queries', async (req, reply) => {
+    const problems = validateQueryBody(req.body);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid query.', problems);
+    }
+    const body = req.body as Record<string, unknown>;
+    const name = body['name'] as string;
+    if (store.getQuery(name)) {
+      return conflict(reply, `A query named "${name}" already exists.`);
+    }
+    const query = store.createQuery(name, toRunSpec(body['spec'] as Record<string, unknown>));
+    return reply.code(201).send(query);
+  });
+
+  app.get<NameParams>('/api/queries/:name', async (req, reply) => {
+    const name = req.params.name;
+    const query = isSlug(name) ? store.getQuery(name) : undefined;
+    if (!query) return notFound(reply, 'Query not found.');
+    return query;
+  });
+
+  app.put<NameParams>('/api/queries/:name', async (req, reply) => {
+    const name = req.params.name;
+    if (!isSlug(name) || !store.getQuery(name)) {
+      return notFound(reply, 'Query not found.');
+    }
+    const problems = validateQueryBody(req.body, true);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid query.', problems);
+    }
+    const body = req.body as Record<string, unknown>;
+    return store.updateQuery(name, toRunSpec(body['spec'] as Record<string, unknown>));
+  });
+
+  app.delete<NameParams>('/api/queries/:name', async (req, reply) => {
+    const name = req.params.name;
+    if (!isSlug(name) || !store.deleteQuery(name)) {
+      return notFound(reply, 'Query not found.');
+    }
+    return { deleted: true };
+  });
+
+  app.post<NameParams>('/api/queries/:name/run', async (req, reply) => {
+    const name = req.params.name;
+    const query = isSlug(name) ? store.getQuery(name) : undefined;
+    if (!query) return notFound(reply, 'Query not found.');
+    const problems = validateQueryRunBody(req.body);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid run overrides.', problems);
+    }
+    // Fast feedback before stats are bumped: a spec pointing at a deleted
+    // profile would only fail at execution time otherwise.
+    const profileProblem = unknownProfileProblem(store, query.spec);
+    if (profileProblem) return badRequest(reply, profileProblem);
+    const spec = prepareSavedQueryRun(store, name, toQueryRunOverrides(req.body));
+    const record = queue.submit(spec);
+    return reply.code(201).send(record);
+  });
+
+  // --- Login profiles -------------------------------------------------------
+  // Metadata + value-free staleness summaries only; the storage-state JSON
+  // (live session cookies) never leaves the server's disk.
+
+  app.get('/api/profiles', async () => ({
+    profiles: store.listProfiles().map((profile) => {
+      let state: ProfileStateSummary | undefined;
+      let stateError: string | undefined;
+      try {
+        state = summarizeProfileState(store.profileStatePath(profile.name));
+      } catch (err) {
+        stateError = errorMessage(err);
+      }
+      return { ...profile, ...(state !== undefined ? { state } : { stateError }) };
+    }),
+  }));
+
+  app.delete<NameParams>('/api/profiles/:name', async (req, reply) => {
+    const name = req.params.name;
+    if (!isSlug(name) || !store.deleteProfile(name)) {
+      return notFound(reply, 'Profile not found.');
+    }
+    return { deleted: true };
+  });
+
+  // Write-only remote bootstrap: the state body is written straight to the
+  // profile's 0600 state file and never logged or echoed back (the Fastify
+  // logger is off; the response carries metadata + summary only). Intended
+  // for trusted networks — the API has no auth, like the rest of the server.
+  app.post('/api/profiles/import', async (req, reply) => {
+    const problems = validateProfileImportBody(req.body);
+    if (problems.length > 0) {
+      return badRequest(reply, 'Invalid profile import.', problems);
+    }
+    const body = req.body as Record<string, unknown>;
+    const name = body['name'] as string;
+    const statePath = store.profileStatePath(name);
+    const stateDir = dirname(statePath);
+    await mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await chmod(stateDir, 0o700); // mkdir mode is ignored when the dir already exists
+    await writeFile(statePath, JSON.stringify(body['state']), { mode: 0o600 });
+    await chmod(statePath, 0o600); // writeFile mode is ignored when the file already exists
+    const profile = store.upsertProfile({
+      name,
+      domainHint: body['domainHint'] as string | undefined,
+      notes: body['notes'] as string | undefined,
+    });
+    return reply.code(201).send({ profile, state: summarizeProfileState(statePath) });
+  });
+}
+
+/**
+ * 400-style problem when a spec names a profile the store doesn't know —
+ * fast feedback at submission instead of a failed run at execution.
+ */
+function unknownProfileProblem(store: RunStore, spec: RunSpec): string | undefined {
+  if (spec.profile !== undefined && !store.getProfile(spec.profile)) {
+    return `unknown profile "${spec.profile}" — create it first (nanofish profile login) or import it via POST /api/profiles/import`;
+  }
+  return undefined;
 }
 
 /** Numeric step indexes of the `<n>.jpg` files in `dir` ([] if missing). */
@@ -177,4 +369,17 @@ function badRequest(reply: FastifyReply, error: string, details?: string[]): Fas
 
 function notFound(reply: FastifyReply, error: string): FastifyReply {
   return reply.code(404).send({ error });
+}
+
+function conflict(reply: FastifyReply, error: string): FastifyReply {
+  return reply.code(409).send({ error });
+}
+
+/** Upstream (search backend / target site) failure on a synchronous route. */
+function badGateway(reply: FastifyReply, error: string): FastifyReply {
+  return reply.code(502).send({ error });
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
