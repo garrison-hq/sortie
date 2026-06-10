@@ -5,7 +5,7 @@
  * layer, semantic extraction module, agent loop, and the persisted runtime
  * (SQLite run store + in-process run queue).
  */
-export const VERSION = '0.1.0';
+export const VERSION = '1.0.0-pre.1';
 
 // Shared contracts (single source of truth for all cross-module types).
 export type {

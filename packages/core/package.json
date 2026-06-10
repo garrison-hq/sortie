@@ -1,6 +1,6 @@
 {
   "name": "@garrison-hq/sortie",
-  "version": "0.1.0",
+  "version": "1.0.0-pre.1",
   "license": "AGPL-3.0-only",
   "description": "Local-first web agents: semantic extraction, multi-step browser automation, web search, and URL-to-Markdown fetch — natural-language goal in, schema-validated JSON out",
   "keywords": [

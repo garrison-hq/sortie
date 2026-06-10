@@ -1,0 +1,51 @@
+name: Publish release
+
+# Publishes @garrison-hq/sortie to npm when a GitHub release is
+# published. Requires the NPM_TOKEN repository secret (an npm
+# automation token with publish rights on the @garrison-hq scope).
+#
+# Flow: bump versions in a commit -> tag it v<version> -> create a
+# GitHub release from that tag -> this workflow publishes to npm.
+# The guard step fails the run if the tag and package.json disagree.
+#
+# Publishes to the default `latest` dist-tag — including pre-releases,
+# deliberately, while pre-releases are the only versions that exist
+# (a `next`-only package would make `npm install` fail). Revisit once
+# a stable 1.0.0 is out.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # npm --provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Verify tag matches package version and VERSION constant
+        run: |
+          pkg=$(node -p "require('./packages/core/package.json').version")
+          tag="${{ github.event.release.tag_name }}"
+          [ "v$pkg" = "$tag" ] || { echo "::error::package.json version v$pkg != release tag $tag"; exit 1; }
+          grep -q "export const VERSION = '$pkg';" packages/core/src/index.ts \
+            || { echo "::error::VERSION constant in packages/core/src/index.ts != $pkg"; exit 1; }
+      - run: pnpm --filter @garrison-hq/sortie build
+      # unit suites exercise real Chromium — same as CI
+      - run: pnpm browsers --with-deps
+      - run: pnpm test
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        working-directory: packages/core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

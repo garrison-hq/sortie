@@ -1,6 +1,6 @@
 {
   "name": "sortie",
-  "version": "0.1.0",
+  "version": "1.0.0-pre.1",
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "Local-first web-agent automation platform: query and act on the web like it were an API",

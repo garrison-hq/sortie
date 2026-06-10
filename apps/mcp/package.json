@@ -1,6 +1,6 @@
 {
   "name": "@garrison-hq/sortie-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0-pre.1",
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "sortie MCP server (stdio) — web_outline, web_search, web_fetch, web_extract, run_agent, run_saved_query",
