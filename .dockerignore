@@ -1,0 +1,32 @@
+# Dependencies and build outputs — rebuilt inside the image.
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Local runtime state (SQLite db, screenshots, sessions).
+data
+**/data
+
+# Secrets — injected at runtime via docker compose env_file, never baked in.
+.env
+
+# VCS and agent/tooling state.
+.git
+.claude
+.agents
+.codegraph
+skills-lock.json
+
+# Test/e2e artifacts.
+**/e2e-artifacts
+**/test-results
+**/playwright-report
+coverage
+
+# Docker files themselves don't belong in the build context.
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+*.log

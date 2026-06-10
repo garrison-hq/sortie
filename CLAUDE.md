@@ -5,16 +5,21 @@ schema-validated JSON out. Full spec and decisions: see PROMPT.md and README.md.
 
 ## Layout
 
-- `packages/core` — SDK + engine: browser manager (Playwright), LLM provider layer,
-  semantic extraction, agent loop, persistence.
+- `packages/core` — SDK + engine + CLI: `contracts.ts` (single source of truth for all
+  cross-module types), `llm/`, `browser/`, `extract/`, `agent/`, `store/` (SQLite),
+  `runtime/` (run queue), `cli.ts` (bin `nanofish`: extract | agent | batch | runs).
 - `apps/server` — Fastify API + WebSocket live view; serves the built UI in production.
-- `apps/ui` — React/Vite playground (author, run, watch agents).
+- `apps/ui` — React/Vite playground (author, run, watch agents). Playwright e2e in `e2e/`.
+- `apps/mcp` — MCP server (stdio): web_outline, web_extract, run_agent. Wired in `.mcp.json`.
+- `examples/` — live verification scripts (`npx tsx examples/<name>.ts` from repo root).
 
 ## Commands
 
-- `pnpm dev` — run server in watch mode
+- `pnpm dev` — run server in watch mode (serves built UI if present); `pnpm dev:ui` — Vite dev server with `/api` proxy
 - `pnpm typecheck` / `pnpm lint` / `pnpm test` — run before considering work done
-- `pnpm build` — build all packages
+- `pnpm build` — build all packages (core → ui → server → mcp)
+- `pnpm --filter @nanofish/ui e2e` — full-stack e2e (rebuilds, boots real server, one live LLM call)
+- CLI after build: `node packages/core/dist/cli.js <extract|agent|batch|runs> ...`
 
 ## Conventions
 
