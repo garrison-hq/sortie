@@ -1,0 +1,37 @@
+---
+title: sortie
+description: Local-first web agents — natural-language goal in, real browser actions, schema-validated JSON out.
+template: splash
+hero:
+  tagline: Query and act on the web like it were an API. Local-first web agents that drive a real browser and return schema-validated JSON — on your machine, with your choice of LLM.
+  actions:
+    - text: Get started
+      link: /sortie/getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/garrison-hq/sortie
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Semantic extraction" icon="magnifier">
+    Describe the data you want in plain language plus a schema. Pages are located by *meaning*,
+    not brittle CSS/XPath selectors — extractions keep working when a site's layout changes.
+  </Card>
+  <Card title="Multi-step agents" icon="rocket">
+    Goal in, browser actions out: navigate, click, type, paginate, recover from failures.
+    Credentials are referenced by name and **never shown to the model**.
+  </Card>
+  <Card title="Search, fetch & PDFs" icon="document">
+    Web search via SearXNG or a browser-engine fallback chain, URL → clean Markdown fetch,
+    and PDF parsing — no LLM key needed for any of them.
+  </Card>
+  <Card title="Local-first" icon="laptop">
+    CLI, typed SDK, REST/WebSocket server, playground UI, and an MCP server. SQLite-backed
+    run queue. No hosted dependency for the core loop — bring Anthropic, OpenAI, or any
+    OpenAI-compatible endpoint (Ollama, vLLM, OpenRouter).
+  </Card>
+</CardGrid>

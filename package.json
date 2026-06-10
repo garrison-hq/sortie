@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/garrison-hq/sortie.git"
   },
-  "homepage": "https://github.com/garrison-hq/sortie#readme",
+  "homepage": "https://garrison-hq.github.io/sortie/",
   "bugs": "https://github.com/garrison-hq/sortie/issues",
   "packageManager": "pnpm@10.27.0",
   "type": "module",

@@ -7,6 +7,8 @@
 
 **Query and act on the web like it were an API.**
 
+**Docs & blog: [garrison-hq.github.io/sortie](https://garrison-hq.github.io/sortie/)** — source lives in [`site/`](./site).
+
 > **Status:** pre-1.0, built alongside other work by one person. APIs and schemas may still change between commits. Production use at your own risk.
 
 sortie is a local-first platform for autonomous web agents. Describe the data you want in plain language plus a JSON Schema, and sortie drives a real Chromium browser, locates content by _meaning_ rather than brittle CSS/XPath selectors, and returns clean, schema-validated JSON — extractions keep working when a site's layout changes. For multi-step tasks ("log in, search for X, collect the first 20 results"), an agent loop plans and executes navigation, clicks, typing, and pagination, recovering from failures along the way. Everything runs on your machine: local browser automation, a SQLite-backed run queue, and your choice of LLM (Anthropic, OpenAI, or any OpenAI-compatible endpoint such as Ollama, vLLM, or OpenRouter).

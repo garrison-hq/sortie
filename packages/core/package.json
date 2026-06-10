@@ -20,7 +20,7 @@
     "url": "git+https://github.com/garrison-hq/sortie.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/garrison-hq/sortie#readme",
+  "homepage": "https://garrison-hq.github.io/sortie/",
   "bugs": "https://github.com/garrison-hq/sortie/issues",
   "type": "module",
   "engines": {

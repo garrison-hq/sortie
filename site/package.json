@@ -1,0 +1,21 @@
+{
+  "name": "@garrison-hq/sortie-site",
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "sortie documentation and blog — published via GitHub Pages",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
+    "sharp": "^0.34.5",
+    "starlight-blog": "^0.26.1"
+  }
+}

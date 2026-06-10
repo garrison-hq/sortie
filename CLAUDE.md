@@ -15,6 +15,8 @@ schema-validated JSON out. Full spec and decisions: see PROMPT.md and README.md.
 - `apps/mcp` — MCP server (stdio): web_outline, web_search, web_fetch, web_extract,
   run_agent, run_saved_query. Wired in `.mcp.json`.
 - `examples/` — live verification scripts (`npx tsx examples/<name>.ts` from repo root).
+- `site/` — Astro Starlight docs + blog, deployed to GitHub Pages at
+  garrison-hq.github.io/sortie (base path `/sortie`) via `.github/workflows/site.yml`.
 
 ## Commands
 
