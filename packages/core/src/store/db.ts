@@ -1,5 +1,5 @@
 /**
- * SQLite bootstrap for the nanofish run store.
+ * SQLite bootstrap for the sortie run store.
  *
  * Owns the physical schema: a `runs` table (one row per queued/executed run,
  * JSON columns for spec/output/usage), a `steps` table (one row per agent
@@ -99,17 +99,17 @@ export interface ProfileRow {
 
 /**
  * Resolve the database path: explicit argument, else
- * `$NANOFISH_DATA_DIR/nanofish.db`, else `./data/nanofish.db`. The store
+ * `$SORTIE_DATA_DIR/sortie.db`, else `./data/sortie.db`. The store
  * derives its data directory (profiles/, screenshots/) from this path.
  */
 export function resolveDbPath(dbPath?: string): string {
-  return dbPath ?? join(process.env.NANOFISH_DATA_DIR ?? './data', 'nanofish.db');
+  return dbPath ?? join(process.env.SORTIE_DATA_DIR ?? './data', 'sortie.db');
 }
 
 /**
- * Open (creating if needed) the nanofish SQLite database and apply the schema.
+ * Open (creating if needed) the sortie SQLite database and apply the schema.
  *
- * Defaults to `$NANOFISH_DATA_DIR/nanofish.db` (or `./data/nanofish.db`);
+ * Defaults to `$SORTIE_DATA_DIR/sortie.db` (or `./data/sortie.db`);
  * the containing directory is created if missing. WAL journaling and foreign
  * keys are enabled on every connection.
  */

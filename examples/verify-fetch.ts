@@ -1,5 +1,5 @@
 /**
- * Live verification of @nanofish/core's URL -> Markdown fetch on real pages.
+ * Live verification of @garrison-hq/sortie's URL -> Markdown fetch on real pages.
  *
  * Run from the repo root:
  *   npx tsx examples/verify-fetch.ts
@@ -14,7 +14,7 @@
  *   4. maxChars truncation sets the truncated flag and the marker.
  */
 // Import the built package directly (the repo root is not a workspace consumer
-// of @nanofish/core, so the bare specifier is not resolvable from examples/).
+// of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import { fetchPage } from '../packages/core/dist/index.js';
 
 let failures = 0;

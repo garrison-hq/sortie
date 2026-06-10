@@ -1,5 +1,5 @@
 /**
- * Live verification of @nanofish/core's browser layer against a real page.
+ * Live verification of @garrison-hq/sortie's browser layer against a real page.
  *
  * Run from the repo root:
  *   npx tsx examples/verify-browser.ts
@@ -14,7 +14,7 @@
  *      whose href matches the snapshot element's href.
  */
 // Import the built package directly (the repo root is not a workspace consumer
-// of @nanofish/core, so the bare specifier is not resolvable from examples/).
+// of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import { BrowserManager, distillPage, resolveRef } from '../packages/core/dist/index.js';
 
 const TARGET_URL = 'https://books.toscrape.com/';

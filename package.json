@@ -1,6 +1,7 @@
 {
-  "name": "nanofish",
+  "name": "sortie",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "Local-first web-agent automation platform: query and act on the web like it were an API",
   "type": "module",
@@ -15,9 +16,9 @@
     ]
   },
   "scripts": {
-    "build": "pnpm --filter @nanofish/core build && pnpm --filter @nanofish/ui build && pnpm --filter @nanofish/server build && pnpm --filter @nanofish/mcp build",
-    "dev": "pnpm --filter @nanofish/server dev",
-    "dev:ui": "pnpm --filter @nanofish/ui dev",
+    "build": "pnpm --filter @garrison-hq/sortie build && pnpm --filter @garrison-hq/sortie-ui build && pnpm --filter @garrison-hq/sortie-server build && pnpm --filter @garrison-hq/sortie-mcp build",
+    "dev": "pnpm --filter @garrison-hq/sortie-server dev",
+    "dev:ui": "pnpm --filter @garrison-hq/sortie-ui dev",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

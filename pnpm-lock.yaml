@@ -41,12 +41,12 @@ importers:
 
   apps/mcp:
     dependencies:
+      '@garrison-hq/sortie':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
-      '@nanofish/core':
-        specifier: workspace:*
-        version: link:../../packages/core
     devDependencies:
       '@types/node':
         specifier: ^25.9.2
@@ -60,7 +60,7 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
-      '@nanofish/core':
+      '@garrison-hq/sortie':
         specifier: workspace:*
         version: link:../../packages/core
       fastify:

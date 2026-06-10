@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "nanofish": {
+    "sortie": {
       "command": "node",
       "args": ["apps/mcp/dist/index.js"]
     }

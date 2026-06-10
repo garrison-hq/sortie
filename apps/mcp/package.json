@@ -1,9 +1,10 @@
 {
-  "name": "@nanofish/mcp",
+  "name": "@garrison-hq/sortie-mcp",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
-    "nanofish-mcp": "./dist/index.js"
+    "sortie-mcp": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -12,7 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@nanofish/core": "workspace:*"
+    "@garrison-hq/sortie": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^25.9.2"

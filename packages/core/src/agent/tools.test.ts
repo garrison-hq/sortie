@@ -186,7 +186,7 @@ describe('executeAction — search and read_page', () => {
   it('rejects out-of-range search maxResults', async () => {
     const { ctx } = makeCtx({});
 
-    const observation = await executeAction(ctx, 'search', { query: 'nanofish', maxResults: 50 });
+    const observation = await executeAction(ctx, 'search', { query: 'sortie', maxResults: 50 });
 
     expect(observation).toMatch(/^Error: invalid input for search/);
     expect(observation).toContain('maxResults');

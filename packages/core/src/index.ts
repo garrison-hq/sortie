@@ -1,5 +1,5 @@
 /**
- * @nanofish/core — public API.
+ * @garrison-hq/sortie — public API.
  *
  * Re-exports the shared contracts plus the LLM provider layer, browser
  * layer, semantic extraction module, agent loop, and the persisted runtime

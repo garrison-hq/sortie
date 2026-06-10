@@ -12,8 +12,8 @@
  * other listeners and must never be mutated.
  */
 import type { FastifyInstance } from 'fastify';
-import type { RunEvent, RunQueue } from '@nanofish/core';
-import { VERSION } from '@nanofish/core';
+import type { RunEvent, RunQueue } from '@garrison-hq/sortie';
+import { VERSION } from '@garrison-hq/sortie';
 
 const WIRE_OBSERVATION_MAX_CHARS = 2000;
 

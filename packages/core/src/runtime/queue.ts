@@ -49,7 +49,7 @@ const SCREENSHOT_JPEG_QUALITY = 55;
 const QUEUED_FETCH_MAX_CHARS = 40_000;
 
 function defaultScreenshotDir(): string {
-  return (process.env.NANOFISH_DATA_DIR ?? './data') + '/screenshots';
+  return (process.env.SORTIE_DATA_DIR ?? './data') + '/screenshots';
 }
 
 /** What a single execution attempt settles to (or it throws: infra error). */

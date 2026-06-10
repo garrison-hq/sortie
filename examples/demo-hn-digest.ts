@@ -10,19 +10,19 @@
  *
  * Output:
  *   - a compact digest table on stdout
- *   - the full result (stories + run metadata) at /tmp/nanofish-hn-digest.json
+ *   - the full result (stories + run metadata) at /tmp/sortie-hn-digest.json
  *
  * Etiquette: Hacker News tolerates polite, rate-limited reading. This demo
  * loads exactly two pages in a single run — keep it that way.
  */
 import { writeFileSync } from 'node:fs';
 // Import the built package directly (the repo root is not a workspace consumer
-// of @nanofish/core, so the bare specifier is not resolvable from examples/).
+// of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import { createProvider, runAgent, jsonSchemaToZod } from '../packages/core/dist/index.js';
 import type { StepRecord } from '../packages/core/dist/index.js';
 
 const START_URL = 'https://news.ycombinator.com';
-const OUT_PATH = '/tmp/nanofish-hn-digest.json';
+const OUT_PATH = '/tmp/sortie-hn-digest.json';
 const STORY_COUNT = 12;
 
 // The output contract as plain JSON Schema (what a CLI/API caller would send),

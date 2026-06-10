@@ -2,12 +2,12 @@
  * Manual request validation for the API server.
  *
  * zod is not directly importable from apps/server (it lives in
- * @nanofish/core's dependency tree under pnpm's strict layout), so request
+ * @garrison-hq/sortie's dependency tree under pnpm's strict layout), so request
  * bodies and query strings are validated with explicit checks that mirror
  * the RunSpec contract. Every validator returns human-readable problems
  * ([] = valid) so routes can answer with clear 400s.
  */
-import { isSlug } from '@nanofish/core';
+import { isSlug } from '@garrison-hq/sortie';
 import type {
   ListRunsOptions,
   QueryRunOverrides,
@@ -15,7 +15,7 @@ import type {
   RunSpec,
   RunStatus,
   SearchEngineId,
-} from '@nanofish/core';
+} from '@garrison-hq/sortie';
 
 export const RUN_STATUSES = [
   'queued',

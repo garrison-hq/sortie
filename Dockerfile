@@ -50,9 +50,9 @@ COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/ui/dist apps/ui/dist
 COPY --from=build /app/apps/mcp/dist apps/mcp/dist
 
-ENV NANOFISH_HOST=0.0.0.0 \
-    NANOFISH_PORT=3470 \
-    NANOFISH_DATA_DIR=/data
+ENV SORTIE_HOST=0.0.0.0 \
+    SORTIE_PORT=3470 \
+    SORTIE_DATA_DIR=/data
 VOLUME /data
 EXPOSE 3470
 CMD ["node", "apps/server/dist/index.js"]

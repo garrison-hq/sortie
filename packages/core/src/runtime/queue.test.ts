@@ -342,7 +342,7 @@ describe('createRunQueue', () => {
   });
 
   it('exposes a store-backed resolveProfile on the executor context', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'nanofish-queue-'));
+    const dir = mkdtempSync(join(tmpdir(), 'sortie-queue-'));
     const statePath = join(dir, 'sauce.json');
     writeFileSync(statePath, '{"cookies":[],"origins":[]}');
     const touched: string[] = [];

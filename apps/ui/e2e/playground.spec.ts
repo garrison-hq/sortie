@@ -1,5 +1,5 @@
 /**
- * E2E suite for the nanofish playground UI, run against the real stack:
+ * E2E suite for the sortie playground UI, run against the real stack:
  * production server + SQLite store + browser-worker queue + a live LLM.
  *
  * Exactly ONE live LLM call happens in this suite (the 'book list' extract
@@ -38,7 +38,7 @@ let liveRunId = '';
 test.describe('shell', () => {
   test('serves the app: nav renders and the WS dot turns connected', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('nav.nav .wordmark')).toHaveText('nanofish');
+    await expect(page.locator('nav.nav .wordmark')).toHaveText('sortie');
     await expect(page.getByRole('link', { name: 'New Run' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Runs' })).toBeVisible();
     // The dot flips to .on once /api/events is open.
@@ -319,7 +319,7 @@ test.describe('api robustness', () => {
     expect(idTraversal.headers()['content-type'] ?? '').not.toContain('image');
 
     // Traversal in the screenshot index segment.
-    const idxTraversal = await request.get('/api/runs/abcdef/screenshots/..%2F..%2Fnanofish.db');
+    const idxTraversal = await request.get('/api/runs/abcdef/screenshots/..%2F..%2Fsortie.db');
     expect([400, 404]).toContain(idxTraversal.status());
     expect(idxTraversal.headers()['content-type'] ?? '').not.toContain('image');
 

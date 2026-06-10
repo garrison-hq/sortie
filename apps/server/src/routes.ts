@@ -1,5 +1,5 @@
 /**
- * REST routes for the nanofish API server.
+ * REST routes for the sortie API server.
  *
  * All endpoints speak JSON (screenshot JPEGs aside). Bodies and query
  * strings are validated manually (see validate.ts) and rejected with clear
@@ -15,14 +15,14 @@ import {
   prepareSavedQueryRun,
   search,
   summarizeProfileState,
-} from '@nanofish/core';
+} from '@garrison-hq/sortie';
 import type {
   ProfileStateSummary,
   RunQueue,
   RunSpec,
   RunStore,
   SearchEngineId,
-} from '@nanofish/core';
+} from '@garrison-hq/sortie';
 import {
   isRecord,
   parseListQuery,
@@ -335,7 +335,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
  */
 function unknownProfileProblem(store: RunStore, spec: RunSpec): string | undefined {
   if (spec.profile !== undefined && !store.getProfile(spec.profile)) {
-    return `unknown profile "${spec.profile}" — create it first (nanofish profile login) or import it via POST /api/profiles/import`;
+    return `unknown profile "${spec.profile}" — create it first (sortie profile login) or import it via POST /api/profiles/import`;
   }
   return undefined;
 }

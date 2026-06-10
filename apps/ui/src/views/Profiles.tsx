@@ -63,8 +63,8 @@ export function Profiles() {
       <h1 className="page-title">Login profiles</h1>
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       <p className="hint">
-        Profiles are created on the machine running nanofish:{' '}
-        <code>nanofish profile login &lt;name&gt; --url &lt;loginUrl&gt;</code> (log in by hand,
+        Profiles are created on the machine running sortie:{' '}
+        <code>sortie profile login &lt;name&gt; --url &lt;loginUrl&gt;</code> (log in by hand,
         then press Enter to save). Pick a profile on the New Run form to reuse its session.
       </p>
       {profiles === null ? (
@@ -72,7 +72,7 @@ export function Profiles() {
       ) : profiles.length === 0 ? (
         <div className="empty-state">
           No profiles yet — create one with{' '}
-          <code>nanofish profile login &lt;name&gt; --url &lt;loginUrl&gt;</code>.
+          <code>sortie profile login &lt;name&gt; --url &lt;loginUrl&gt;</code>.
         </div>
       ) : (
         <table className="runs-table profiles-table">

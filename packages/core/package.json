@@ -1,6 +1,7 @@
 {
-  "name": "@nanofish/core",
+  "name": "@garrison-hq/sortie",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -8,7 +9,7 @@
     ".": "./dist/index.js"
   },
   "bin": {
-    "nanofish": "./dist/cli.js"
+    "sortie": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

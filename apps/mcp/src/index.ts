@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * nanofish MCP server (stdio).
+ * sortie MCP server (stdio).
  *
- * Exposes nanofish's web capabilities as MCP tools so any agent can query
+ * Exposes sortie's web capabilities as MCP tools so any agent can query
  * and act on the web like it were an API:
  *   - web_outline: distill a page into an LLM-readable outline (no LLM needed)
  *   - web_search: web search via SearXNG or browser-driven engines (no LLM needed)
@@ -29,7 +29,7 @@ import {
   isSlug,
   VERSION,
   type RunStore,
-} from '@nanofish/core';
+} from '@garrison-hq/sortie';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,13 +70,13 @@ function resolveProfileArg(tool: string, profile: unknown): string | undefined {
   const store = getStore();
   if (!store.getProfile(profile)) {
     throw new Error(
-      `${tool}: login profile "${profile}" does not exist — create it with \`nanofish profile login ${profile} --url <loginUrl>\``,
+      `${tool}: login profile "${profile}" does not exist — create it with \`sortie profile login ${profile} --url <loginUrl>\``,
     );
   }
   const statePath = store.profileStatePath(profile);
   if (!existsSync(statePath)) {
     throw new Error(
-      `${tool}: login profile "${profile}" has no storage-state file on disk — re-create it with \`nanofish profile login ${profile} --url <loginUrl>\``,
+      `${tool}: login profile "${profile}" has no storage-state file on disk — re-create it with \`sortie profile login ${profile} --url <loginUrl>\``,
     );
   }
   store.touchProfile(profile);
@@ -155,7 +155,7 @@ const TOOLS = [
         profile: {
           type: 'string',
           description:
-            'Optional named login profile (created via `nanofish profile login`) whose saved session cookies are loaded before navigating, so extraction starts already signed in.',
+            'Optional named login profile (created via `sortie profile login`) whose saved session cookies are loaded before navigating, so extraction starts already signed in.',
         },
       },
       required: ['url', 'schema'],
@@ -192,7 +192,7 @@ const TOOLS = [
         profile: {
           type: 'string',
           description:
-            'Optional named login profile (created via `nanofish profile login`) whose saved session cookies are loaded before the agent starts, so it begins already signed in.',
+            'Optional named login profile (created via `sortie profile login`) whose saved session cookies are loaded before the agent starts, so it begins already signed in.',
         },
       },
       required: ['goal', 'startUrl'],
@@ -201,13 +201,13 @@ const TOOLS = [
   {
     name: 'run_saved_query',
     description:
-      'Execute a saved extraction query by name, optionally overriding its URL or instruction for this run (e.g. replay the same schema against page 2). The run is persisted to the nanofish run store like any other run (inspect with `nanofish runs`). Requires an LLM provider key on the server.',
+      'Execute a saved extraction query by name, optionally overriding its URL or instruction for this run (e.g. replay the same schema against page 2). The run is persisted to the sortie run store like any other run (inspect with `sortie runs`). Requires an LLM provider key on the server.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
-          description: 'Saved query name (created via `nanofish query save` or the API)',
+          description: 'Saved query name (created via `sortie query save` or the API)',
         },
         urlOverride: {
           type: 'string',
@@ -232,7 +232,7 @@ function errorResult(err: unknown) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
-const server = new Server({ name: 'nanofish', version: VERSION }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'sortie', version: VERSION }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...TOOLS] }));
 
@@ -511,4 +511,4 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`nanofish MCP server v${VERSION} ready (stdio)`);
+console.error(`sortie MCP server v${VERSION} ready (stdio)`);

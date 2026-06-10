@@ -9,7 +9,7 @@
 /** Lowercase alphanumeric start, then up to 63 more of [a-z0-9_-]. */
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-/** True when `value` is a valid nanofish slug (query/profile name). */
+/** True when `value` is a valid sortie slug (query/profile name). */
 export function isSlug(value: string): boolean {
   return SLUG_PATTERN.test(value);
 }

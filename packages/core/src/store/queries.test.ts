@@ -25,7 +25,7 @@ describe('saved queries', () => {
   let store: RunStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-queries-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-queries-'));
     store = createRunStore(join(dir, 'test.db'));
   });
 

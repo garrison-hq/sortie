@@ -1,7 +1,7 @@
 /**
  * One-time manual login for collectandgo.be (or any CAPTCHA-gated site).
  *
- * Colruyt's anti-bot wall requires a human once; nanofish never bypasses
+ * Colruyt's anti-bot wall requires a human once; sortie never bypasses
  * CAPTCHAs by design. This opens a headful browser — log in yourself, solve
  * the verification, then press Enter in the terminal. The session (cookies +
  * storage) is saved and any later agent run can reuse it:
@@ -11,7 +11,7 @@
  *     --goal "..." --storage-state data/sessions/collectandgo.json ...
  */
 import { createInterface } from 'node:readline/promises';
-import { BrowserManager } from '@nanofish/core';
+import { BrowserManager } from '@garrison-hq/sortie';
 
 const SESSION_PATH = 'data/sessions/collectandgo.json';
 

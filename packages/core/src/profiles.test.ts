@@ -26,7 +26,7 @@ describe('summarizeProfileState', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-state-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-state-'));
   });
 
   afterEach(() => {
@@ -90,7 +90,7 @@ describe('persistProfileState', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-persist-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-persist-'));
   });
 
   afterEach(() => {

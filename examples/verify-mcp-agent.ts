@@ -1,5 +1,5 @@
 /**
- * Agentic verification of the nanofish MCP server's run_agent tool: connect
+ * Agentic verification of the sortie MCP server's run_agent tool: connect
  * as a real MCP client over stdio and drive a live multi-step login flow on
  * the-internet.herokuapp.com (public demo credentials — not secrets).
  *

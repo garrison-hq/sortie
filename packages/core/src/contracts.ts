@@ -1,5 +1,5 @@
 /**
- * Shared contracts for nanofish core modules.
+ * Shared contracts for sortie core modules.
  *
  * Modules implement against these types:
  * - `llm/`      — LLM provider layer (Anthropic + OpenAI-compatible)
@@ -438,7 +438,7 @@ export interface QueueOptions {
   maxRetries?: number;
   provider?: LlmProvider;
   /** Per-step JPEG screenshots for live view + replay. Default enabled;
-   * stored under `dir` (default $NANOFISH_DATA_DIR/screenshots/<runId>/). */
+   * stored under `dir` (default $SORTIE_DATA_DIR/screenshots/<runId>/). */
   screenshots?: { enabled?: boolean; dir?: string };
 }
 

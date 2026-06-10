@@ -1,7 +1,7 @@
 /**
  * API payload types, replicated from packages/core/src/contracts.ts.
  *
- * The UI is a browser bundle and must not import @nanofish/core (which pulls
+ * The UI is a browser bundle and must not import @garrison-hq/sortie (which pulls
  * in playwright/node deps) — keep these in sync with the core contracts.
  */
 

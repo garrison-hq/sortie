@@ -1,6 +1,6 @@
-# SearXNG configuration for the nanofish web-search backend.
+# SearXNG configuration for the sortie web-search backend.
 # Merged over the image's defaults (use_default_settings) — only the overrides
-# nanofish needs live here.
+# sortie needs live here.
 use_default_settings: true
 
 server:
@@ -10,7 +10,7 @@ server:
   secret_key: 'CHANGE_ME_TO_A_LONG_RANDOM_STRING'
 
 search:
-  # nanofish queries /search?format=json — "json" must be listed here, or the
+  # sortie queries /search?format=json — "json" must be listed here, or the
   # instance answers HTTP 403 to every search request.
   formats:
     - html

@@ -33,7 +33,7 @@ describe('RunStore.exportRuns', () => {
   let store: RunStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-export-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-export-'));
     store = createRunStore(join(dir, 'test.db'));
   });
 

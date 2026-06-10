@@ -1,5 +1,5 @@
 /**
- * Playwright E2E configuration for the nanofish playground UI.
+ * Playwright E2E configuration for the sortie playground UI.
  *
  * Runs against the REAL stack: the webServer command builds the whole
  * monorepo, then starts the production server (apps/server/dist) on a
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
 
 const E2E_PORT = 3471;
-const E2E_DATA_DIR = '/tmp/nanofish-e2e-data';
+const E2E_DATA_DIR = '/tmp/sortie-e2e-data';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export default defineConfig({
@@ -49,8 +49,8 @@ export default defineConfig({
     timeout: 300_000,
     env: {
       // Explicit env beats the repo .env loaded by the server at boot.
-      NANOFISH_DATA_DIR: E2E_DATA_DIR,
-      NANOFISH_PORT: String(E2E_PORT),
+      SORTIE_DATA_DIR: E2E_DATA_DIR,
+      SORTIE_PORT: String(E2E_PORT),
     },
     stdout: 'ignore',
     stderr: 'pipe',

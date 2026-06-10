@@ -338,7 +338,7 @@ export function NewRun() {
           <span className="field-label">
             Login profile{' '}
             <span className="hint">
-              reuse a saved session — create profiles with <code>nanofish profile login</code>
+              reuse a saved session — create profiles with <code>sortie profile login</code>
             </span>
           </span>
           <select value={profile} onChange={(e) => setProfile(e.target.value)}>

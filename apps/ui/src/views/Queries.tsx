@@ -8,7 +8,7 @@ import { messageOf, relativeTime } from '../util';
 /**
  * Saved queries: named, replayable extract specs. Each row can be replayed
  * as-is, replayed against an overridden URL, or deleted. Queries are created
- * from the New Run form, a run's detail page, or `nanofish query save`.
+ * from the New Run form, a run's detail page, or `sortie query save`.
  */
 export function Queries() {
   const [queries, setQueries] = useState<SavedQuery[] | null>(null);
@@ -76,7 +76,7 @@ export function Queries() {
       ) : queries.length === 0 ? (
         <div className="empty-state">
           No saved queries yet — save one from <a href="#/new">a new extract run</a>, a finished
-          run's detail page, or <code>nanofish query save</code>.
+          run's detail page, or <code>sortie query save</code>.
         </div>
       ) : (
         <table className="runs-table queries-table">

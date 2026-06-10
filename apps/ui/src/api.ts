@@ -1,8 +1,8 @@
 /**
- * Typed REST client for the nanofish server.
+ * Typed REST client for the sortie server.
  *
  * Same-origin `/api` paths: the Vite dev server proxies them to the local
- * nanofish server, and in production the server serves the UI itself.
+ * sortie server, and in production the server serves the UI itself.
  * Response shapes are normalized defensively (bare record vs `{ record }`
  * wrapper, bare array vs `{ runs }`) so the UI tolerates either convention.
  */
@@ -32,7 +32,7 @@ async function request<T = unknown>(path: string, init?: RequestInit): Promise<T
     res = await fetch(path, init);
   } catch (err) {
     throw new ApiError(
-      `Cannot reach the nanofish server (${err instanceof Error ? err.message : String(err)}).`,
+      `Cannot reach the sortie server (${err instanceof Error ? err.message : String(err)}).`,
     );
   }
   const text = await res.text();
@@ -157,7 +157,7 @@ export function screenshotImageUrl(
 /** Fetch all persisted screenshots for a run, sorted by step index. */
 export async function listScreenshots(runId: string): Promise<ScreenshotRef[]> {
   const body = await request(`/api/runs/${encodeURIComponent(runId)}/screenshots`);
-  // The nanofish server answers { indexes: number[] }; tolerate bare arrays
+  // The sortie server answers { indexes: number[] }; tolerate bare arrays
   // and { screenshots } wrappers too (same defensive stance as runs above).
   const items: unknown[] = Array.isArray(body)
     ? body

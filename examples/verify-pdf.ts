@@ -1,5 +1,5 @@
 /**
- * Live verification of @nanofish/core's PDF support against a real paper.
+ * Live verification of @garrison-hq/sortie's PDF support against a real paper.
  *
  * Run from the repo root (extract step needs the provider key in .env):
  *   npx tsx examples/verify-pdf.ts
@@ -14,7 +14,7 @@
  *      include Vaswani.
  */
 // Import the built package directly (the repo root is not a workspace consumer
-// of @nanofish/core, so the bare specifier is not resolvable from examples/).
+// of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import {
   createProvider,
   extract,

@@ -1,34 +1,34 @@
 #!/usr/bin/env node
 /**
- * nanofish CLI — semantic extraction, multi-step agent runs, web search,
+ * sortie CLI — semantic extraction, multi-step agent runs, web search,
  * URL→Markdown fetch, saved queries, login profiles, batches, and persisted
  * run inspection.
  *
- *   nanofish extract <url> --schema <inline-JSON-or-@file>
+ *   sortie extract <url> --schema <inline-JSON-or-@file>
  *     [--instruction <text>] [--provider anthropic|openai] [--model <m>]
  *     [--out <file>] [--headful] [--profile <name>]
  *
- *   nanofish agent <startUrl> --goal <text>
+ *   sortie agent <startUrl> --goal <text>
  *     [--schema <inline-JSON-or-@file>] [--max-steps N] [--cred NAME ...]
  *     [--headful] [--out <file>] [--storage-state <path>] [--trace <file>]
  *     [--profile <name>] [--save-profile <name>]
  *
- *   nanofish search "<query>" [--max-results N] [--engine <id> ...] [--out <file>]
- *   nanofish fetch <url> [--format markdown|text|json] [--max-chars N] [--out <file>]
+ *   sortie search "<query>" [--max-results N] [--engine <id> ...] [--out <file>]
+ *   sortie fetch <url> [--format markdown|text|json] [--max-chars N] [--out <file>]
  *
- *   nanofish query save <name> (--url <u> --schema <s> [--instruction <t>] | --from-run <id>)
- *   nanofish query list | show <name> | run <name> [--url <u>] [--instruction <t>] | delete <name>
+ *   sortie query save <name> (--url <u> --schema <s> [--instruction <t>] | --from-run <id>)
+ *   sortie query list | show <name> | run <name> [--url <u>] [--instruction <t>] | delete <name>
  *
- *   nanofish profile login <name> --url <loginUrl> [--notes <text>]
- *   nanofish profile list | check <name> | delete <name>
+ *   sortie profile login <name> --url <loginUrl> [--notes <text>]
+ *   sortie profile list | check <name> | delete <name>
  *
- *   nanofish batch <specs-file>
+ *   sortie batch <specs-file>
  *     [--concurrency N] [--data-dir <path>] [--export <file.json|file.csv>]
  *     [--provider anthropic|openai] [--model <m>]
  *
- *   nanofish runs list [--limit N] [--status <s>] [--batch <id>] [--data-dir <path>]
- *   nanofish runs show <id> [--data-dir <path>]
- *   nanofish runs export <file.json|file.csv> [--batch <id>] [--data-dir <path>]
+ *   sortie runs list [--limit N] [--status <s>] [--batch <id>] [--data-dir <path>]
+ *   sortie runs show <id> [--data-dir <path>]
+ *   sortie runs export <file.json|file.csv> [--batch <id>] [--data-dir <path>]
  */
 import { parseArgs } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -61,17 +61,17 @@ import { persistProfileState, summarizeProfileState } from './profiles.js';
 import { createRunStore, prepareSavedQueryRun } from './store/index.js';
 import { createRunQueue } from './runtime/index.js';
 
-const HELP = `nanofish — semantic web extraction & web agents
+const HELP = `sortie — semantic web extraction & web agents
 
 Usage:
-  nanofish extract <url> --schema <inline-JSON-or-@file> [options]
-  nanofish agent <startUrl> --goal <text> [options]
-  nanofish search "<query>" [options]
-  nanofish fetch <url> [options]
-  nanofish query <save|list|show|run|delete> [args] [options]
-  nanofish profile <login|list|check|delete> [args] [options]
-  nanofish batch <specs-file> [options]
-  nanofish runs <list|show|export> [args] [options]
+  sortie extract <url> --schema <inline-JSON-or-@file> [options]
+  sortie agent <startUrl> --goal <text> [options]
+  sortie search "<query>" [options]
+  sortie fetch <url> [options]
+  sortie query <save|list|show|run|delete> [args] [options]
+  sortie profile <login|list|check|delete> [args] [options]
+  sortie batch <specs-file> [options]
+  sortie runs <list|show|export> [args] [options]
 
 Extract options:
   --schema <value>        JSON Schema for the result. Inline JSON, or @path/to/file.json
@@ -169,7 +169,7 @@ Shared options:
   --model <model>         Model override for the provider
   --headful               Run the browser with a visible window (extract/agent/
                           search/fetch; profile login is always headful)
-  --data-dir <path>       Directory holding the nanofish.db SQLite database and
+  --data-dir <path>       Directory holding the sortie.db SQLite database and
                           the profiles/ state files (batch, runs, query,
                           profile, and --profile/--save-profile resolution)
   -h, --help              Show this help
@@ -181,29 +181,29 @@ Environment:
   CAPTCHA-free); otherwise search falls back to a browser-engine chain.
 
 Examples:
-  nanofish extract https://books.toscrape.com \\
+  sortie extract https://books.toscrape.com \\
     --schema '{"type":"object","properties":{"books":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}},"required":["title","price"]}}},"required":["books"]}' \\
     --instruction "the list of books on the page"
 
-  SAUCE_PASSWORD=... nanofish agent https://www.saucedemo.com \\
+  SAUCE_PASSWORD=... sortie agent https://www.saucedemo.com \\
     --goal "log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total" \\
     --cred SAUCE_PASSWORD \\
     --schema '{"type":"object","properties":{"total":{"type":"string"}},"required":["total"]}'
 
-  nanofish search "playwright storage state docs" --max-results 5
-  nanofish fetch https://arxiv.org/pdf/1706.03762 --format text
+  sortie search "playwright storage state docs" --max-results 5
+  sortie fetch https://arxiv.org/pdf/1706.03762 --format text
 
-  nanofish query save books --url https://books.toscrape.com --schema @schema.json
-  nanofish query run books --url https://books.toscrape.com/catalogue/page-2.html
+  sortie query save books --url https://books.toscrape.com --schema @schema.json
+  sortie query run books --url https://books.toscrape.com/catalogue/page-2.html
 
-  nanofish profile login sauce --url https://www.saucedemo.com
-  nanofish agent https://www.saucedemo.com/inventory.html --profile sauce --goal "..."
+  sortie profile login sauce --url https://www.saucedemo.com
+  sortie agent https://www.saucedemo.com/inventory.html --profile sauce --goal "..."
 
-  nanofish batch specs.jsonl --concurrency 3 --export results.csv
+  sortie batch specs.jsonl --concurrency 3 --export results.csv
 
-  nanofish runs list --status success --limit 20
-  nanofish runs show 1f2e3d4c
-  nanofish runs export batch-output.json --batch <batch-id>`;
+  sortie runs list --status success --limit 20
+  sortie runs show 1f2e3d4c
+  sortie runs export batch-output.json --batch <batch-id>`;
 
 const OBSERVATION_PREVIEW_CHARS = 100;
 const INPUT_PREVIEW_CHARS = 120;
@@ -557,7 +557,7 @@ function resolveProfileFlag(values: CliValues): string | undefined {
     if (!record || !existsSync(statePath)) {
       throw new Error(
         `profile "${name}" ${record ? 'has no storage-state file' : 'does not exist'} — ` +
-          `create it with: nanofish profile login ${name} --url <loginUrl>`,
+          `create it with: sortie profile login ${name} --url <loginUrl>`,
       );
     }
     store.touchProfile(name);
@@ -702,7 +702,7 @@ function exportFormatFromPath(filePath: string, flag: string): 'json' | 'csv' {
 /** Open the SQLite-backed run store, honoring --data-dir. */
 function openRunStore(values: CliValues): RunStore {
   const dataDir = values['data-dir'];
-  return createRunStore(dataDir ? join(resolve(dataDir), 'nanofish.db') : undefined);
+  return createRunStore(dataDir ? join(resolve(dataDir), 'sortie.db') : undefined);
 }
 
 function shortRunId(id: string): string {
@@ -1328,7 +1328,7 @@ function runProfileListCommand(values: CliValues): void {
     const profiles = store.listProfiles();
     if (profiles.length === 0) {
       process.stderr.write(
-        'No profiles. Create one with: nanofish profile login <name> --url <loginUrl>\n',
+        'No profiles. Create one with: sortie profile login <name> --url <loginUrl>\n',
       );
       return;
     }
@@ -1386,7 +1386,7 @@ function runProfileCheckCommand(name: string, values: CliValues): void {
       if (!state.exists) {
         errorMessage =
           `profile "${name}" has no storage-state file — recreate it with: ` +
-          `nanofish profile login ${name} --url <loginUrl>`;
+          `sortie profile login ${name} --url <loginUrl>`;
       } else if (state.expiredCookieCount > 0) {
         process.stderr.write(
           `Warning: ${state.expiredCookieCount} cookie(s) already expired — the login may be stale.\n`,

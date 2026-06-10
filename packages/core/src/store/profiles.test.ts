@@ -10,7 +10,7 @@ describe('login profiles (store)', () => {
   let store: RunStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-profiles-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-profiles-'));
     store = createRunStore(join(dir, 'test.db'));
   });
 

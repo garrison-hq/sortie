@@ -27,7 +27,7 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o';
  * defaults. Explicit `cfg` values always win.
  *
  * Environment variables:
- * - `NANOFISH_PROVIDER` — 'anthropic' (default) or 'openai'
+ * - `SORTIE_PROVIDER` — 'anthropic' (default) or 'openai'
  * - `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (default 'claude-sonnet-4-6')
  * - `OPENAI_API_KEY`, `OPENAI_MODEL` (default 'gpt-4o'),
  *   `OPENAI_BASE_URL` (default 'https://api.openai.com/v1')
@@ -72,11 +72,11 @@ export function createProvider(cfg: Partial<ProviderConfig> = {}): LlmProvider {
 }
 
 function providerFromEnv(): ProviderConfig['provider'] {
-  const raw = readEnv('NANOFISH_PROVIDER');
+  const raw = readEnv('SORTIE_PROVIDER');
   if (raw === undefined) return 'anthropic';
   const normalized = raw.toLowerCase();
   if (normalized === 'anthropic' || normalized === 'openai') return normalized;
-  throw new Error(`Invalid NANOFISH_PROVIDER value "${raw}": expected "anthropic" or "openai".`);
+  throw new Error(`Invalid SORTIE_PROVIDER value "${raw}": expected "anthropic" or "openai".`);
 }
 
 function readEnv(name: string): string | undefined {

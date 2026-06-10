@@ -38,7 +38,7 @@ describe('createRunStore', () => {
   let store: RunStore;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'nanofish-store-'));
+    dir = mkdtempSync(join(tmpdir(), 'sortie-store-'));
     store = createRunStore(join(dir, 'test.db'));
   });
 

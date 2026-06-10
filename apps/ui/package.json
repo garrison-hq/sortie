@@ -1,8 +1,9 @@
 {
-  "name": "@nanofish/ui",
+  "name": "@garrison-hq/sortie-ui",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
-  "description": "nanofish playground UI — author, run, and watch web-agent runs",
+  "description": "sortie playground UI — author, run, and watch web-agent runs",
   "type": "module",
   "scripts": {
     "dev": "vite",

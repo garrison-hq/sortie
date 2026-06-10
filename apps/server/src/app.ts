@@ -12,7 +12,7 @@ import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
-import type { RunQueue, RunStore } from '@nanofish/core';
+import type { RunQueue, RunStore } from '@garrison-hq/sortie';
 import { registerRoutes } from './routes.js';
 import { registerEventsRoute } from './ws.js';
 
@@ -44,7 +44,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   } else {
     app.get('/', async () => ({
       ok: true,
-      name: '@nanofish/server',
+      name: '@garrison-hq/sortie-server',
       message: 'UI build not found — API only. See /api/health.',
     }));
   }

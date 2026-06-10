@@ -1,5 +1,5 @@
 /**
- * Live verification of @nanofish/core's web search against real engines.
+ * Live verification of @garrison-hq/sortie's web search against real engines.
  *
  * Run from the repo root:
  *   npx tsx examples/verify-search.ts
@@ -21,7 +21,7 @@
  * exits 0.
  */
 // Import the built package directly (the repo root is not a workspace consumer
-// of @nanofish/core, so the bare specifier is not resolvable from examples/).
+// of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import { createProvider, search } from '../packages/core/dist/index.js';
 import type { LlmProvider } from '../packages/core/dist/index.js';
 

@@ -1,5 +1,5 @@
 /**
- * Agentic verification of the nanofish MCP server: connect as a real MCP
+ * Agentic verification of the sortie MCP server: connect as a real MCP
  * client over stdio, list tools, and exercise both live.
  *
  * Run from repo root: npx tsx examples/verify-mcp.ts
@@ -26,7 +26,7 @@ check('initialize handshake', true);
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  'tools/list returns the 6 nanofish tools',
+  'tools/list returns the 6 sortie tools',
   names.join(',') === 'run_agent,run_saved_query,web_extract,web_fetch,web_outline,web_search',
   names.join(','),
 );
