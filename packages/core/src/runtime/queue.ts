@@ -15,6 +15,7 @@
  * ever appear in records, events, or failure reasons.
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Page } from 'playwright';
@@ -32,7 +33,8 @@ import type {
 } from '../contracts.js';
 import { createProvider } from '../llm/index.js';
 import { BrowserManager } from '../browser/index.js';
-import { extract, navigateAndSettle, jsonSchemaToZod } from '../extract/index.js';
+import { extract, navigateOrPdfSnapshot, jsonSchemaToZod } from '../extract/index.js';
+import { fetchPage } from '../fetch/index.js';
 import { runAgent } from '../agent/loop.js';
 
 const DEFAULT_CONCURRENCY = 5;
@@ -42,6 +44,9 @@ const DEFAULT_PER_DOMAIN_INTERVAL_MS = 1000;
 const DEFAULT_MAX_RETRIES = 2;
 const SCREENSHOT_TIMEOUT_MS = 5000;
 const SCREENSHOT_JPEG_QUALITY = 55;
+/** Markdown cap for queued fetch runs — tighter than fetchPage's 80k default
+ * because outputs are persisted in SQLite (store bloat guard). */
+const QUEUED_FETCH_MAX_CHARS = 40_000;
 
 function defaultScreenshotDir(): string {
   return (process.env.NANOFISH_DATA_DIR ?? './data') + '/screenshots';
@@ -75,6 +80,13 @@ export type ExecuteRunFn = (
      * the page down.
      */
     screenshots: { capture(page: Page, stepIndex: number): void; flush(): Promise<void> };
+    /**
+     * Resolve a named login profile to its storage-state path: metadata row
+     * present AND state file on disk → path (lastUsedAt is stamped);
+     * otherwise undefined. Never throws — a missing profile is a final
+     * 'failed' outcome, not an infrastructure error.
+     */
+    resolveProfile: (name: string) => string | undefined;
   },
 ) => Promise<ExecuteRunOutcome>;
 
@@ -173,6 +185,22 @@ export function createRunQueue(
   function getProvider(): LlmProvider {
     provider ??= createProvider();
     return provider;
+  }
+
+  /** Profile slug → storage-state path (and lastUsedAt stamp), or undefined
+   * when the profile is missing its metadata row or on-disk state file. */
+  function resolveProfile(name: string): string | undefined {
+    try {
+      if (!store.getProfile(name)) return undefined;
+      const path = store.profileStatePath(name);
+      if (!existsSync(path)) return undefined;
+      store.touchProfile(name);
+      return path;
+    } catch {
+      // Non-slug names (profileStatePath throws) resolve like missing
+      // profiles — executors turn that into a final 'failed' outcome.
+      return undefined;
+    }
   }
 
   const queue: QueueItem[] = [];
@@ -304,6 +332,7 @@ export function createRunQueue(
         manager,
         onStep,
         screenshots,
+        resolveProfile,
         get provider(): LlmProvider {
           return getProvider();
         },
@@ -410,7 +439,7 @@ export function createRunQueue(
 }
 
 // ---------------------------------------------------------------------------
-// Default execution: real extract / agent runs
+// Default execution: real extract / agent / fetch runs
 // ---------------------------------------------------------------------------
 
 const defaultExecuteRun: ExecuteRunFn = async (spec, ctx) => {
@@ -419,8 +448,46 @@ const defaultExecuteRun: ExecuteRunFn = async (spec, ctx) => {
       return executeExtract(spec, ctx);
     case 'agent':
       return executeAgent(spec, ctx);
+    case 'fetch':
+      return executeFetch(spec, ctx);
   }
 };
+
+/**
+ * Resolve `spec.profile` / `spec.storageStatePath` into the storage-state
+ * path a run should use. Problems are returned as final 'failed' outcomes
+ * (never thrown): a missing profile cannot heal through infra retries, so
+ * retrying would only burn budget.
+ */
+function resolveSessionState(
+  spec: RunSpec,
+  ctx: ExecuteRunCtx,
+): { storageStatePath?: string } | { failure: ExecuteRunOutcome } {
+  if (spec.profile === undefined) {
+    return { storageStatePath: spec.storageStatePath };
+  }
+  if (spec.storageStatePath !== undefined) {
+    return {
+      failure: {
+        status: 'failed',
+        failureReason:
+          '`profile` and `storageStatePath` are mutually exclusive — set one or the other.',
+      },
+    };
+  }
+  const path = ctx.resolveProfile(spec.profile);
+  if (path === undefined) {
+    return {
+      failure: {
+        status: 'failed',
+        failureReason:
+          `Login profile "${spec.profile}" does not exist ` +
+          '(no profile metadata or no storage-state file on disk).',
+      },
+    };
+  }
+  return { storageStatePath: path };
+}
 
 async function executeExtract(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteRunOutcome> {
   if (!spec.schemaJson) {
@@ -430,15 +497,23 @@ async function executeExtract(spec: RunSpec, ctx: ExecuteRunCtx): Promise<Execut
       failureReason: 'Extract runs require `schemaJson` (a JSON Schema for the output).',
     };
   }
+  const session = resolveSessionState(spec, ctx);
+  if ('failure' in session) return session.failure;
   const schema = jsonSchemaToZod(spec.schemaJson);
 
-  const page = await ctx.manager.newPage({ storageStatePath: spec.storageStatePath });
+  const page = await ctx.manager.newPage({ storageStatePath: session.storageStatePath });
   try {
-    await navigateAndSettle(page, spec.url);
-    // Single screenshot per extract run: the settled page, as step 0.
-    ctx.screenshots.capture(page, 0);
+    // Navigate with PDF detection: PDF URLs are parsed into a pre-built
+    // snapshot (headless Chromium aborts PDF navigations — routing them here
+    // avoids burning infrastructure retries on those aborts).
+    const pdfSnapshot = await navigateOrPdfSnapshot(page, spec.url);
+    if (!pdfSnapshot) {
+      // Single screenshot per extract run: the settled page, as step 0.
+      // (PDFs never render — the page stayed blank.)
+      ctx.screenshots.capture(page, 0);
+    }
     const result = await extract({
-      page,
+      ...(pdfSnapshot ? { snapshot: pdfSnapshot } : { page }),
       schema,
       instruction: spec.instruction,
       provider: ctx.provider,
@@ -466,6 +541,8 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
       failureReason: 'Agent runs require `goal` (the natural-language objective).',
     };
   }
+  const session = resolveSessionState(spec, ctx);
+  if ('failure' in session) return session.failure;
 
   // Resolve credentials from the environment by NAME; values never enter
   // records, events, or failure reasons.
@@ -481,7 +558,7 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
     credentials[name] = value;
   }
 
-  const page = await ctx.manager.newPage({ storageStatePath: spec.storageStatePath });
+  const page = await ctx.manager.newPage({ storageStatePath: session.storageStatePath });
   try {
     const result = await runAgent({
       goal: spec.goal,
@@ -503,6 +580,37 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
       output: result.output,
       failureReason: result.failureReason,
       usage: result.usage,
+      finalUrl: result.finalUrl,
+    };
+  } finally {
+    // Let in-flight captures land while the page is still alive.
+    await ctx.screenshots.flush();
+    await page
+      .context()
+      .close()
+      .catch(() => {});
+  }
+}
+
+async function executeFetch(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteRunOutcome> {
+  const session = resolveSessionState(spec, ctx);
+  if ('failure' in session) return session.failure;
+
+  const page = await ctx.manager.newPage({ storageStatePath: session.storageStatePath });
+  try {
+    const result = await fetchPage({
+      url: spec.url,
+      page,
+      maxChars: spec.maxChars ?? QUEUED_FETCH_MAX_CHARS,
+    });
+    // Single screenshot per fetch run: the settled page, as step 0 — HTML
+    // only (PDFs never render; the page stayed blank or aborted navigation).
+    if (result.contentType === 'html') {
+      ctx.screenshots.capture(page, 0);
+    }
+    return {
+      status: 'success',
+      output: result,
       finalUrl: result.finalUrl,
     };
   } finally {

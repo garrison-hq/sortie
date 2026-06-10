@@ -27,6 +27,7 @@ export function buildAgentSystemPrompt(opts: AgentSystemPromptOptions): string {
     '- Work step by step toward the goal: observe the latest snapshot, decide the single best next action, and call exactly one tool.',
     '- Element refs go STALE after any navigation or DOM change. Only ever use refs from the LATEST snapshot; never reuse a ref from an earlier snapshot.',
     '- If an action fails, read the error in the observation, re-examine the fresh snapshot, and try a different approach instead of repeating the same action.',
+    "- Use the search tool to discover relevant pages on the web (it runs in a separate tab and never disturbs the current page), and read_page to cheaply read the current page's prose (articles, docs) as Markdown — prefer read_page over extract when you just need to read text.",
     '',
     'Credentials:',
   ];

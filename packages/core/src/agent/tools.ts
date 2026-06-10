@@ -16,6 +16,15 @@ import type { Page, Locator } from 'playwright';
 import type { LlmProvider, ToolDefinition } from '../contracts.js';
 import { resolveRef } from '../browser/index.js';
 import { extract, navigateAndSettle } from '../extract/index.js';
+import { extractArticle, htmlToMarkdown, stripBoilerplate } from '../fetch/markdown.js';
+import {
+  downloadPdf,
+  isAbortedNavigation,
+  pdfToDocument,
+  pdfToMarkdown,
+  sniffPdfResponse,
+} from '../pdf/index.js';
+import { search } from '../search/index.js';
 
 export interface ExecutionContext {
   page: Page;
@@ -28,6 +37,14 @@ const WAIT_FOR_TEXT_TIMEOUT_MS = 10_000;
 const MAX_WAIT_SECONDS = 10;
 const MAX_SCROLL_PAGES = 20;
 const EXTRACT_OBSERVATION_MAX = 4_000;
+const PDF_OBSERVATION_MAX = 4_000;
+const SEARCH_OBSERVATION_MAX = 3_000;
+const SEARCH_SNIPPET_MAX = 200;
+const SEARCH_MAX_RESULTS = 10;
+const SEARCH_DEFAULT_RESULTS = 5;
+const READ_PAGE_MIN_CHARS = 500;
+const READ_PAGE_MAX_CHARS = 8_000;
+const READ_PAGE_DEFAULT_CHARS = 6_000;
 const ERROR_MESSAGE_MAX = 500;
 const TRUNCATION_MARKER = '...[truncated]';
 const CRED_PLACEHOLDER_RE = /\{\{cred:([A-Z0-9_]+)\}\}/g;
@@ -104,6 +121,27 @@ const extractInput = z.object({
     ),
 });
 
+const searchInput = z.object({
+  query: z.string().min(1).describe('Web search query, e.g. "Attention Is All You Need arxiv".'),
+  maxResults: z
+    .number()
+    .int()
+    .min(1)
+    .max(SEARCH_MAX_RESULTS)
+    .optional()
+    .describe('Number of results to return (1-10). Default 5.'),
+});
+
+const readPageInput = z.object({
+  maxChars: z
+    .number()
+    .int()
+    .min(READ_PAGE_MIN_CHARS)
+    .max(READ_PAGE_MAX_CHARS)
+    .optional()
+    .describe('Cap on the returned Markdown length (500-8000 characters). Default 6000.'),
+});
+
 const doneInput = z.object({
   result: z
     .record(z.string(), z.unknown())
@@ -173,6 +211,22 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     inputSchema: toInputSchema(extractInput),
   },
   {
+    name: 'search',
+    description:
+      'Search the web and get a numbered list of results (title, URL, snippet). Runs in a ' +
+      'separate tab — the current page and its element refs are untouched. Use navigate to ' +
+      'open a result URL.',
+    inputSchema: toInputSchema(searchInput),
+  },
+  {
+    name: 'read_page',
+    description:
+      "Read the CURRENT page's main content as clean Markdown (boilerplate stripped, no " +
+      'navigation). Cheap and instant — prefer this over extract when you just need to read ' +
+      'prose like an article or documentation.',
+    inputSchema: toInputSchema(readPageInput),
+  },
+  {
     name: 'done',
     description:
       'The goal is fully achieved. Submit the final structured result object. ' +
@@ -226,7 +280,16 @@ async function dispatch(
       if (!isAbsoluteHttpUrl(url)) {
         return `Error: navigate requires an absolute http(s) URL including the protocol; got "${url}"`;
       }
-      await navigateAndSettle(ctx.page, url);
+      try {
+        await navigateAndSettle(ctx.page, url);
+      } catch (err) {
+        // Headless Chromium aborts PDF navigations (net::ERR_ABORTED) —
+        // sniff the headers and surface the PDF's content instead of an error.
+        if (isAbortedNavigation(err) && (await sniffPdfResponse(ctx.page.context().request, url))) {
+          return await pdfObservation(ctx.page, url);
+        }
+        throw err;
+      }
       return `Navigated to ${ctx.page.url()}`;
     }
 
@@ -342,6 +405,46 @@ async function dispatch(
       return `Extracted: ${json}`;
     }
 
+    case 'search': {
+      const parsed = searchInput.safeParse(input);
+      if (!parsed.success) return invalidInput(tool, parsed.error);
+      const { query } = parsed.data;
+      const maxResults = parsed.data.maxResults ?? SEARCH_DEFAULT_RESULTS;
+      // Browser-engine searches run in a TEMPORARY page so the agent's page
+      // (and the refs in its latest snapshot) is never navigated away.
+      const tempPage = await ctx.page.context().newPage();
+      try {
+        const response = await search(query, {
+          maxResults,
+          page: tempPage,
+          provider: ctx.provider,
+        });
+        if (response.results.length === 0) {
+          return `Search for "${query}" returned no results. Try a different query.`;
+        }
+        const lines = response.results.map((r) => {
+          const snippet = r.snippet ? `\n   ${clip(r.snippet, SEARCH_SNIPPET_MAX)}` : '';
+          return `${r.position}. ${r.title} — ${r.url}${snippet}`;
+        });
+        return clip(`Search results for "${query}":\n${lines.join('\n')}`, SEARCH_OBSERVATION_MAX);
+      } finally {
+        await tempPage.close().catch(() => {});
+      }
+    }
+
+    case 'read_page': {
+      const parsed = readPageInput.safeParse(input);
+      if (!parsed.success) return invalidInput(tool, parsed.error);
+      const maxChars = parsed.data.maxChars ?? READ_PAGE_DEFAULT_CHARS;
+      // Pure DOM -> Markdown conversion on the live page's content: no
+      // navigation, no LLM call.
+      const url = ctx.page.url();
+      const html = await ctx.page.content();
+      const contentHtml = extractArticle(html, url)?.contentHtml ?? stripBoilerplate(html, url);
+      const markdown = htmlToMarkdown(contentHtml);
+      return `Page content as Markdown:\n${clip(markdown, maxChars)}`;
+    }
+
     // Termination semantics (validating the result, ending the run) belong to
     // the agent loop; the executor just acknowledges.
     case 'done': {
@@ -422,6 +525,20 @@ async function describeLocator(locator: Locator): Promise<string> {
   } catch {
     return 'element';
   }
+}
+
+/**
+ * Observation for navigating to a PDF URL: the document is downloaded through
+ * the context's request (sharing cookies) and parsed, but the browser never
+ * renders it — the agent's page stays on the previous URL.
+ */
+async function pdfObservation(page: Page, url: string): Promise<string> {
+  const data = await downloadPdf(page.context().request, url);
+  const doc = await pdfToDocument(data);
+  const header =
+    `${url} is a PDF document (${doc.numPages} page${doc.numPages === 1 ? '' : 's'}) — ` +
+    'no interactive elements; the browser remains on the previous page. Content:';
+  return clip(`${header}\n${pdfToMarkdown(doc)}`, PDF_OBSERVATION_MAX);
 }
 
 function invalidInput(tool: string, error: z.ZodError): string {

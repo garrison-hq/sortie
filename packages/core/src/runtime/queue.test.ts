@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ListRunsOptions,
@@ -15,7 +18,7 @@ import { createRunQueue, type ExecuteRunFn } from './queue.js';
 // ---------------------------------------------------------------------------
 
 /** Minimal in-memory RunStore so queue tests need no SQLite, browser, or LLM. */
-function createFakeStore(): RunStore {
+function createFakeStore(overrides: Partial<RunStore> = {}): RunStore {
   const runs = new Map<string, RunRecord>();
   const steps = new Map<string, StepRecord[]>();
   let seq = 0;
@@ -64,7 +67,41 @@ function createFakeStore(): RunStore {
     exportRuns() {
       throw new Error('not supported by fake store');
     },
+    // Saved queries + profiles are unused by queue tests.
+    createQuery() {
+      throw new Error('not supported by fake store');
+    },
+    updateQuery() {
+      throw new Error('not supported by fake store');
+    },
+    getQuery() {
+      return undefined;
+    },
+    listQueries() {
+      return [];
+    },
+    deleteQuery() {
+      return false;
+    },
+    recordQueryRun() {},
+    upsertProfile() {
+      throw new Error('not supported by fake store');
+    },
+    getProfile() {
+      return undefined;
+    },
+    listProfiles() {
+      return [];
+    },
+    deleteProfile() {
+      return false;
+    },
+    touchProfile() {},
+    profileStatePath() {
+      throw new Error('not supported by fake store');
+    },
     close() {},
+    ...overrides,
   };
 }
 
@@ -99,7 +136,7 @@ describe('createRunQueue', () => {
   function makeQueue(
     store: RunStore,
     opts: Parameters<typeof createRunQueue>[1],
-    exec: ExecuteRunFn,
+    exec?: ExecuteRunFn,
   ): RunQueue {
     const queue = createRunQueue(store, opts, exec);
     queues.push(queue);
@@ -302,5 +339,105 @@ describe('createRunQueue', () => {
     queue.submit(spec('https://y.test/'));
     await queue.drain();
     expect(events).toHaveLength(5);
+  });
+
+  it('exposes a store-backed resolveProfile on the executor context', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nanofish-queue-'));
+    const statePath = join(dir, 'sauce.json');
+    writeFileSync(statePath, '{"cookies":[],"origins":[]}');
+    const touched: string[] = [];
+    const store = createFakeStore({
+      getProfile: (name) =>
+        name === 'sauce' ? { name: 'sauce', createdAt: Date.now() } : undefined,
+      profileStatePath: () => statePath,
+      touchProfile: (name) => {
+        touched.push(name);
+      },
+    });
+
+    try {
+      const resolved: Array<string | undefined> = [];
+      const exec: ExecuteRunFn = async (_spec, ctx) => {
+        resolved.push(ctx.resolveProfile('sauce'), ctx.resolveProfile('ghost'));
+        return { status: 'success' };
+      };
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, exec);
+
+      queue.submit(spec('https://x.test/'));
+      await queue.drain();
+
+      // Known profile -> state path (and a lastUsedAt stamp); unknown -> undefined.
+      expect(resolved).toEqual([statePath, undefined]);
+      expect(touched).toEqual(['sauce']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails runs referencing an unknown profile finally (attempts 1, no infra retry)', async () => {
+    const store = createFakeStore();
+    // Real default executor: profile resolution happens before any browser
+    // page or LLM provider is touched, so no infrastructure is required.
+    const queue = makeQueue(store, { maxRetries: 2, perDomainIntervalMs: 0 });
+
+    const submitted = [
+      queue.submit({
+        kind: 'extract',
+        url: 'https://x.test/',
+        schemaJson: { type: 'object' },
+        profile: 'ghost',
+      }),
+      queue.submit({ kind: 'agent', url: 'https://y.test/', goal: 'do things', profile: 'ghost' }),
+      queue.submit({ kind: 'fetch', url: 'https://z.test/doc', profile: 'ghost' }),
+    ];
+    await queue.drain();
+
+    for (const run of submitted) {
+      const record = store.getRun(run.id)!;
+      expect(record.status).toBe('failed');
+      expect(record.failureReason).toContain('ghost');
+      expect(record.attempts).toBe(1); // final outcome — never retried
+    }
+  });
+
+  it('fails runs setting both profile and storageStatePath (no silent precedence)', async () => {
+    const store = createFakeStore();
+    const queue = makeQueue(store, { perDomainIntervalMs: 0 });
+
+    const { id } = queue.submit({
+      kind: 'fetch',
+      url: 'https://x.test/',
+      profile: 'sauce',
+      storageStatePath: '/tmp/state.json',
+    });
+    await queue.drain();
+
+    const record = store.getRun(id)!;
+    expect(record.status).toBe('failed');
+    expect(record.failureReason).toContain('mutually exclusive');
+    expect(record.attempts).toBe(1);
+  });
+
+  it('routes fetch specs through the queue like any other run kind', async () => {
+    const store = createFakeStore();
+    const seen: RunSpec[] = [];
+    const exec: ExecuteRunFn = async (s) => {
+      seen.push(s);
+      return {
+        status: 'success',
+        output: { markdown: '# Hi', contentType: 'html' },
+        finalUrl: 'https://x.test/final',
+      };
+    };
+    const queue = makeQueue(store, { perDomainIntervalMs: 0 }, exec);
+
+    const { id } = queue.submit({ kind: 'fetch', url: 'https://x.test/', maxChars: 1234 });
+    await queue.drain();
+
+    expect(seen).toEqual([{ kind: 'fetch', url: 'https://x.test/', maxChars: 1234 }]);
+    const record = store.getRun(id)!;
+    expect(record.status).toBe('success');
+    expect(record.output).toEqual({ markdown: '# Hi', contentType: 'html' });
+    expect(record.finalUrl).toBe('https://x.test/final');
   });
 });

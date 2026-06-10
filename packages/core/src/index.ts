@@ -25,6 +25,14 @@ export type {
   ResolveRefFn,
   ExtractOptions,
   ExtractResult,
+  SearchEngineId,
+  SearchResult,
+  SearchOptions,
+  SearchResponse,
+  SearchProvider,
+  FetchPageOptions,
+  FetchPageResult,
+  PdfDocument,
   AgentStatus,
   AgentRunOptions,
   AgentAction,
@@ -35,6 +43,9 @@ export type {
   RunSpec,
   RunRecord,
   ListRunsOptions,
+  SavedQuery,
+  QueryRunOverrides,
+  ProfileRecord,
   RunStore,
   RunEvent,
   QueueOptions,
@@ -59,9 +70,40 @@ export type { WithPageOptions } from './browser/index.js';
 export {
   extract,
   navigateAndSettle,
+  navigateOrPdfSnapshot,
   jsonSchemaToZod,
   EXTRACTION_SYSTEM_PROMPT,
 } from './extract/index.js';
+
+// Web search (SearXNG-first, browser-engine fallback chain).
+export { search, createSearchProvider, normalizeResults, clampMaxResults } from './search/index.js';
+
+// URL -> Markdown fetch (HTML or PDF).
+export {
+  fetchPage,
+  FETCH_MAX_CHARS,
+  collectLinks,
+  extractArticle,
+  htmlToMarkdown,
+  markdownToText,
+  stripBoilerplate,
+} from './fetch/index.js';
+export type { ArticleContent } from './fetch/index.js';
+
+// PDF download + text extraction.
+export {
+  isPdfUrl,
+  sniffPdfResponse,
+  downloadPdf,
+  pdfToDocument,
+  pdfToMarkdown,
+  pdfToSnapshot,
+  PDF_MAX_BYTES,
+  PDF_MAX_PAGES,
+  PDF_MAX_CHARS,
+  PDF_SNAPSHOT_OUTLINE,
+} from './pdf/index.js';
+export type { DownloadPdfOptions, PdfToDocumentOptions } from './pdf/index.js';
 
 // Multi-step agent loop.
 export { runAgent } from './agent/loop.js';
@@ -70,9 +112,23 @@ export type { ExecutionContext } from './agent/tools.js';
 export { buildAgentSystemPrompt } from './agent/prompts.js';
 export type { AgentSystemPromptOptions } from './agent/prompts.js';
 
-// Persistence (SQLite run store).
-export { createRunStore, openDatabase, exportRuns } from './store/index.js';
-export type { RunRow, ExportRunsOptions } from './store/index.js';
+// Naming (slug validation for query/profile names).
+export { SLUG_PATTERN, isSlug } from './naming.js';
+
+// Login profiles (storage-state staleness summary + secure persistence).
+export { summarizeProfileState, persistProfileState } from './profiles.js';
+export type { ProfileStateSummary } from './profiles.js';
+
+// Persistence (SQLite run store + saved-query replay helpers).
+export {
+  createRunStore,
+  openDatabase,
+  resolveDbPath,
+  exportRuns,
+  buildQueryRunSpec,
+  prepareSavedQueryRun,
+} from './store/index.js';
+export type { RunRow, SavedQueryRow, ProfileRow, ExportRunsOptions } from './store/index.js';
 
 // Run queue (in-process worker pool over the persisted store).
 export { createRunQueue } from './runtime/index.js';

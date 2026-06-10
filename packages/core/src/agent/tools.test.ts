@@ -17,6 +17,8 @@ interface FakeLocatorOptions {
   count?: number;
   /** If set, locator.fill() rejects with this error. */
   fillError?: Error;
+  /** HTML returned by page.content() (read_page tests). */
+  html?: string;
 }
 
 interface FakeLocatorLog {
@@ -48,6 +50,7 @@ function makeFakePage(opts: FakeLocatorOptions = {}): { page: Page; log: FakeLoc
     locator: () => locator,
     url: () => 'https://example.com/',
     waitForLoadState: () => Promise.resolve(),
+    content: () => Promise.resolve(opts.html ?? '<html><body></body></html>'),
   } as unknown as Page;
   return { page, log };
 }
@@ -159,5 +162,55 @@ describe('executeAction — error observations', () => {
     const observation = await executeAction(ctx, 'click', {});
 
     expect(observation).toMatch(/^Error: invalid input for click/);
+  });
+});
+
+describe('executeAction — search and read_page', () => {
+  it('registers search and read_page before the terminal done/fail tools', () => {
+    const names = AGENT_TOOLS.map((tool) => tool.name);
+    expect(names.indexOf('search')).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf('search')).toBeLessThan(names.indexOf('done'));
+    expect(names.indexOf('read_page')).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf('read_page')).toBeLessThan(names.indexOf('done'));
+  });
+
+  it('rejects search input without a query (validated before any page is opened)', async () => {
+    const { ctx } = makeCtx({});
+
+    const observation = await executeAction(ctx, 'search', {});
+
+    expect(observation).toMatch(/^Error: invalid input for search/);
+    expect(observation).toContain('query');
+  });
+
+  it('rejects out-of-range search maxResults', async () => {
+    const { ctx } = makeCtx({});
+
+    const observation = await executeAction(ctx, 'search', { query: 'nanofish', maxResults: 50 });
+
+    expect(observation).toMatch(/^Error: invalid input for search/);
+    expect(observation).toContain('maxResults');
+  });
+
+  it('rejects out-of-range read_page maxChars', async () => {
+    const { ctx } = makeCtx({});
+
+    const observation = await executeAction(ctx, 'read_page', { maxChars: 100 });
+
+    expect(observation).toMatch(/^Error: invalid input for read_page/);
+    expect(observation).toContain('maxChars');
+  });
+
+  it('read_page converts the current page content to Markdown without navigating', async () => {
+    const { ctx } = makeCtx(
+      {},
+      { html: '<html><body><h1>Hello</h1><p>Plain prose paragraph.</p></body></html>' },
+    );
+
+    const observation = await executeAction(ctx, 'read_page', {});
+
+    expect(observation).toContain('Page content as Markdown:');
+    expect(observation).toContain('Hello');
+    expect(observation).toContain('Plain prose paragraph.');
   });
 });
