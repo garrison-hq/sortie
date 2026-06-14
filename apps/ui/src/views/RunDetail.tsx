@@ -38,7 +38,7 @@ interface OutputPaneProps {
 
 /** The left-pane output region: successful output (with copy), an in-progress
  * placeholder, or the failure reason. */
-function OutputPane({ record, outputJson, inFlight, copied, onCopy }: OutputPaneProps) {
+function OutputPane({ record, outputJson, inFlight, copied, onCopy }: Readonly<OutputPaneProps>) {
   if (record.status === 'success' && outputJson !== null) {
     return (
       <>

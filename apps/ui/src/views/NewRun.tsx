@@ -109,7 +109,7 @@ function KindField({
   onGoalChange,
   maxCharsText,
   onMaxCharsChange,
-}: KindFieldProps) {
+}: Readonly<KindFieldProps>) {
   if (kind === 'extract') {
     return (
       <label className="field">

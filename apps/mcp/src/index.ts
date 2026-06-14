@@ -245,7 +245,7 @@ function isPositiveInteger(value: unknown): boolean {
 }
 
 /** True when `value` is a non-null, non-array object (a JSON Schema object). */
-function isSchemaObject(value: unknown): boolean {
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -313,7 +313,7 @@ async function handleWebExtract(args: unknown): Promise<ToolResult> {
     return errorResult(new Error('web_extract: "schema" must be a JSON Schema object'));
   }
   const storageStatePath = resolveProfileArg('web_extract', profile);
-  const zodSchema = jsonSchemaToZod(schema as Record<string, unknown>);
+  const zodSchema = jsonSchemaToZod(schema);
   // Own the page (instead of letting extract() navigate) so the
   // profile's storage state can be loaded into the browser context.
   const result = await withPage({ storageStatePath }, async (page) => {
@@ -397,8 +397,7 @@ async function handleRunAgent(args: unknown): Promise<ToolResult> {
   if ('error' in resolved) return resolved.error;
 
   const storageStatePath = resolveProfileArg('run_agent', profile);
-  const zodSchema =
-    schema === undefined ? undefined : jsonSchemaToZod(schema as Record<string, unknown>);
+  const zodSchema = schema === undefined ? undefined : jsonSchemaToZod(schema);
   const result = await runAgent({
     goal,
     startUrl,

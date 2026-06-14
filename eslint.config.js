@@ -29,6 +29,7 @@ export default tseslint.config(
       'unicorn/no-useless-spread': 'error', // S7747
       'unicorn/prefer-top-level-await': 'error', // S7785
       'unicorn/no-negated-condition': 'error', // S7735
+      'unicorn/prefer-code-point': 'error', // S7758
     },
   },
   {
