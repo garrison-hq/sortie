@@ -94,7 +94,9 @@ async function main(): Promise<void> {
   log(`listening on ${address} (data dir: ${dataDir})`);
 }
 
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (err: unknown) {
   log(`fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   process.exit(1);
-});
+}

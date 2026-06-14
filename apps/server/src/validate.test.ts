@@ -31,7 +31,7 @@ describe('validateRunSpec', () => {
         goal: 'log in',
         maxSteps: 10,
         credentialNames: ['DEMO_USER', 'DEMO_PASS'],
-        storageStatePath: '/tmp/state.json',
+        storageStatePath: 'state.json',
         instruction: undefined,
       }),
     ).toEqual([]);
@@ -110,7 +110,7 @@ describe('validateRunSpec', () => {
       url: 'https://x.test',
       goal: 'go',
       profile: 'sauce',
-      storageStatePath: '/tmp/state.json',
+      storageStatePath: 'state.json',
     });
     expect(errors).toEqual([
       'profile and storageStatePath are mutually exclusive — set one or the other',
@@ -151,7 +151,7 @@ describe('toRunSpec', () => {
 
   it('omits optional fields that are absent or mistyped', () => {
     const spec = toRunSpec({ kind: 'agent', url: 'https://example.com', goal: 'go' });
-    expect(Object.keys(spec).sort()).toEqual(['goal', 'kind', 'url']);
+    expect(Object.keys(spec).sort((a, b) => a.localeCompare(b))).toEqual(['goal', 'kind', 'url']);
   });
 
   it('copies profile, queryName, and maxChars', () => {

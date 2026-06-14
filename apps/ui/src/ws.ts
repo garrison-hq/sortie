@@ -31,7 +31,7 @@ function isRunEvent(value: unknown): value is RunEvent {
 function setConnected(next: boolean): void {
   if (connected === next) return;
   connected = next;
-  for (const listener of [...statusListeners]) {
+  for (const listener of statusListeners) {
     try {
       listener(next);
     } catch {
@@ -49,10 +49,10 @@ function scheduleReconnect(): void {
 }
 
 function connect(): void {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const proto = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:';
   let ws: WebSocket;
   try {
-    ws = new WebSocket(`${proto}//${window.location.host}/api/events`);
+    ws = new WebSocket(`${proto}//${globalThis.location.host}/api/events`);
   } catch {
     scheduleReconnect();
     return;
@@ -72,7 +72,7 @@ function connect(): void {
       return; // malformed frame — drop it
     }
     if (!isRunEvent(parsed)) return;
-    for (const listener of [...eventListeners]) {
+    for (const listener of eventListeners) {
       try {
         listener(parsed);
       } catch {

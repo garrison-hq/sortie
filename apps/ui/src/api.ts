@@ -27,6 +27,13 @@ export class ApiError extends Error {
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+  // Defense-in-depth: every caller passes a hardcoded same-origin `/api/...`
+  // path with dynamic segments already encodeURIComponent'd. Reject anything
+  // that could escape the same origin (absolute or protocol-relative URLs)
+  // before it ever reaches fetch().
+  if (!path.startsWith('/api/')) {
+    throw new ApiError(`Refusing to request non-same-origin path: ${path}`);
+  }
   let res: Response;
   try {
     res = await fetch(path, init);
@@ -108,18 +115,23 @@ export interface RunWithSteps {
   steps: StepRecord[];
 }
 
+/** Steps may ride along on the top-level body or inside the record itself. */
+function extractSteps(body: unknown, record: RunRecord): StepRecord[] {
+  if (isRecord(body) && Array.isArray(body['steps'])) {
+    return body['steps'] as StepRecord[];
+  }
+  const recordSteps = (record as unknown as Record<string, unknown>)['steps'];
+  if (Array.isArray(recordSteps)) {
+    return recordSteps as StepRecord[];
+  }
+  return [];
+}
+
 export async function getRun(id: string): Promise<RunWithSteps> {
   const body = await request(`/api/runs/${encodeURIComponent(id)}`);
   const record = unwrapRunRecord(body);
   if (!record) throw new ApiError(`Run ${id} not found.`, 404);
-  // Steps may ride along on the top-level body or inside the record itself.
-  const steps =
-    isRecord(body) && Array.isArray(body['steps'])
-      ? (body['steps'] as StepRecord[])
-      : Array.isArray((record as unknown as Record<string, unknown>)['steps'])
-        ? ((record as unknown as Record<string, unknown>)['steps'] as StepRecord[])
-        : [];
-  return { record, steps };
+  return { record, steps: extractSteps(body, record) };
 }
 
 // ---------------------------------------------------------------------------
@@ -154,18 +166,23 @@ export function screenshotImageUrl(
   return `/api/runs/${encodeURIComponent(runId)}/screenshots/${shot.stepIndex}`;
 }
 
+/**
+ * The sortie server answers { indexes: number[] }; tolerate bare arrays and
+ * { screenshots } wrappers too (same defensive stance as runs above).
+ */
+function screenshotItems(body: unknown): unknown[] {
+  if (Array.isArray(body)) return body;
+  if (isRecord(body) && Array.isArray(body['indexes'])) return body['indexes'] as unknown[];
+  if (isRecord(body) && Array.isArray(body['screenshots'])) {
+    return body['screenshots'] as unknown[];
+  }
+  return [];
+}
+
 /** Fetch all persisted screenshots for a run, sorted by step index. */
 export async function listScreenshots(runId: string): Promise<ScreenshotRef[]> {
   const body = await request(`/api/runs/${encodeURIComponent(runId)}/screenshots`);
-  // The sortie server answers { indexes: number[] }; tolerate bare arrays
-  // and { screenshots } wrappers too (same defensive stance as runs above).
-  const items: unknown[] = Array.isArray(body)
-    ? body
-    : isRecord(body) && Array.isArray(body['indexes'])
-      ? (body['indexes'] as unknown[])
-      : isRecord(body) && Array.isArray(body['screenshots'])
-        ? (body['screenshots'] as unknown[])
-        : [];
+  const items = screenshotItems(body);
 
   const shots: ScreenshotRef[] = [];
   for (const item of items) {
@@ -187,10 +204,12 @@ function normalizeScreenshot(runId: string, item: unknown): ScreenshotRef | unde
   if (isRecord(item)) {
     const path = typeof item['path'] === 'string' ? item['path'] : undefined;
     const url = typeof item['url'] === 'string' ? item['url'] : undefined;
-    const stepIndex =
-      typeof item['stepIndex'] === 'number'
-        ? item['stepIndex']
-        : stepIndexFromName(path ?? url ?? '');
+    let stepIndex: number | undefined;
+    if (typeof item['stepIndex'] === 'number') {
+      stepIndex = item['stepIndex'];
+    } else {
+      stepIndex = stepIndexFromName(path ?? url ?? '');
+    }
     if (stepIndex === undefined) return undefined;
     return { stepIndex, url: screenshotImageUrl(runId, { stepIndex, path, url }) };
   }
@@ -200,8 +219,11 @@ function normalizeScreenshot(runId: string, item: unknown): ScreenshotRef | unde
 /** Best-effort step index from a file name like ".../step-0007.jpg". */
 function stepIndexFromName(name: string): number | undefined {
   const basename = name.split('/').pop() ?? '';
-  const match = /(\d+)(?!.*\d)/.exec(basename);
-  return match ? Number(match[1]) : undefined;
+  // Last run of digits in the name. A single global match is linear; the
+  // earlier `/(\d+)(?!.*\d)/` lookahead form was super-linear on long inputs.
+  const digitRuns = basename.match(/\d+/g);
+  const last = digitRuns?.at(-1);
+  return last === undefined ? undefined : Number(last);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,22 +287,25 @@ const EMPTY_PROFILE_STATE: ProfileStateSummary = {
   domains: [],
 };
 
+/** The state summary may ride along as `state` or `summary`. */
+function profileState(item: Record<string, unknown>): ProfileStateSummary {
+  if (isRecord(item['state'])) return item['state'] as unknown as ProfileStateSummary;
+  if (isRecord(item['summary'])) return item['summary'] as unknown as ProfileStateSummary;
+  return EMPTY_PROFILE_STATE;
+}
+
 export async function listProfiles(): Promise<ProfileInfo[]> {
   const body = await request('/api/profiles');
-  const items: unknown[] = Array.isArray(body)
-    ? body
-    : isRecord(body) && Array.isArray(body['profiles'])
-      ? (body['profiles'] as unknown[])
-      : [];
+  let items: unknown[] = [];
+  if (Array.isArray(body)) {
+    items = body;
+  } else if (isRecord(body) && Array.isArray(body['profiles'])) {
+    items = body['profiles'] as unknown[];
+  }
   const profiles: ProfileInfo[] = [];
   for (const item of items) {
     if (!isRecord(item) || typeof item['name'] !== 'string') continue;
-    // The state summary may ride along as `state` or `summary`.
-    const state = isRecord(item['state'])
-      ? (item['state'] as unknown as ProfileStateSummary)
-      : isRecord(item['summary'])
-        ? (item['summary'] as unknown as ProfileStateSummary)
-        : EMPTY_PROFILE_STATE;
+    const state = profileState(item);
     profiles.push({ ...(item as unknown as ProfileInfo), state });
   }
   return profiles;

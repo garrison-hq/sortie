@@ -217,32 +217,40 @@ async function fastParseSerp(
       snippetLimit: number;
     }): RawSerpHit[] => {
       const doc = (globalThis as unknown as MinimalSerpWindow).document;
-      const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+      const collapse = (s: string): string => s.replaceAll(/\s+/g, ' ').trim();
 
-      const out: RawSerpHit[] = [];
-      const containers = doc.querySelectorAll(cfg.container);
-      for (let i = 0; i < containers.length && out.length < cfg.max; i++) {
-        const item = containers[i];
-        if (!item) continue;
-        if (cfg.exclude && item.matches(cfg.exclude)) continue;
+      // Parse a single container into a hit, or null if it should be skipped
+      // (excluded, no usable link, or empty title). Pulled out of the loop to
+      // keep the per-result branching out of the iteration body.
+      const parseContainer = (item: MinimalSerpElement): RawSerpHit | null => {
+        if (cfg.exclude && item.matches(cfg.exclude)) return null;
 
         const linkEl = item.querySelector(cfg.link);
-        if (!linkEl || typeof linkEl.href !== 'string' || !linkEl.href) continue;
+        if (!linkEl || typeof linkEl.href !== 'string' || !linkEl.href) return null;
 
         const titleEl = (cfg.title ? item.querySelector(cfg.title) : null) ?? linkEl;
         const title = collapse(typeof titleEl.innerText === 'string' ? titleEl.innerText : '');
-        if (!title) continue;
+        if (!title) return null;
 
         const snippetEl = item.querySelector(cfg.snippet);
         const snippet = collapse(
           snippetEl && typeof snippetEl.innerText === 'string' ? snippetEl.innerText : '',
         );
 
-        out.push({
+        return {
           title: title.slice(0, cfg.titleLimit),
           url: linkEl.href,
           snippet: snippet.slice(0, cfg.snippetLimit),
-        });
+        };
+      };
+
+      const out: RawSerpHit[] = [];
+      const containers = doc.querySelectorAll(cfg.container);
+      for (let i = 0; i < containers.length && out.length < cfg.max; i++) {
+        const item = containers[i];
+        if (!item) continue;
+        const hit = parseContainer(item);
+        if (hit) out.push(hit);
       }
       return out;
     },

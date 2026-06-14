@@ -41,7 +41,7 @@ export function Profiles() {
 
   async function remove(name: string): Promise<void> {
     if (
-      !window.confirm(
+      !globalThis.confirm(
         `Delete profile "${name}"? Its stored login state is removed from the server.`,
       )
     ) {
@@ -64,17 +64,17 @@ export function Profiles() {
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       <p className="hint">
         Profiles are created on the machine running sortie:{' '}
-        <code>sortie profile login &lt;name&gt; --url &lt;loginUrl&gt;</code> (log in by hand,
-        then press Enter to save). Pick a profile on the New Run form to reuse its session.
+        <code>sortie profile login &lt;name&gt; --url &lt;loginUrl&gt;</code> (log in by hand, then
+        press Enter to save). Pick a profile on the New Run form to reuse its session.
       </p>
-      {profiles === null ? (
-        <div className="loading">Loading profiles…</div>
-      ) : profiles.length === 0 ? (
+      {profiles === null && <div className="loading">Loading profiles…</div>}
+      {profiles !== null && profiles.length === 0 && (
         <div className="empty-state">
           No profiles yet — create one with{' '}
           <code>sortie profile login &lt;name&gt; --url &lt;loginUrl&gt;</code>.
         </div>
-      ) : (
+      )}
+      {profiles !== null && profiles.length > 0 && (
         <table className="runs-table profiles-table">
           <thead>
             <tr>
@@ -108,7 +108,7 @@ export function Profiles() {
                     )}
                   </td>
                   <td className="cell-url" title={domains}>
-                    {domains !== '' ? domains : (profile.domainHint ?? '—')}
+                    {domains === '' ? (profile.domainHint ?? '—') : domains}
                   </td>
                   <td className="cell-dim">
                     {state.exists
@@ -117,9 +117,9 @@ export function Profiles() {
                   </td>
                   <td className="cell-dim">{relativeTime(profile.createdAt, now)}</td>
                   <td className="cell-dim">
-                    {profile.lastUsedAt !== undefined
-                      ? relativeTime(profile.lastUsedAt, now)
-                      : 'never'}
+                    {profile.lastUsedAt === undefined
+                      ? 'never'
+                      : relativeTime(profile.lastUsedAt, now)}
                   </td>
                   <td>
                     <div className="row-actions">

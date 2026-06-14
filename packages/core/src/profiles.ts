@@ -76,7 +76,9 @@ export function summarizeProfileState(path: string): ProfileStateSummary {
     cookieCount: cookies.length,
     sessionCookieCount: cookies.length - persistent.length,
     expiredCookieCount: persistent.filter((c) => c.expires * 1000 < now).length,
-    domains: [...new Set(cookies.map((c) => c.domain.replace(/^\./, '')))].sort(),
+    domains: [...new Set(cookies.map((c) => c.domain.replace(/^\./, '')))].sort((a, b) =>
+      a.localeCompare(b),
+    ),
     earliestExpiresAt: earliest,
   };
 }

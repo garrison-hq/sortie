@@ -53,9 +53,9 @@ export function exportRuns(db: Database.Database, opts: ExportRunsOptions): stri
         url: spec.url,
         kind: row.kind,
         status: row.status,
-        output: row.output !== null ? (JSON.parse(row.output) as unknown) : undefined,
+        output: row.output === null ? undefined : (JSON.parse(row.output) as unknown),
         failureReason: row.failure_reason ?? undefined,
-        usage: row.usage !== null ? (JSON.parse(row.usage) as TokenUsage) : undefined,
+        usage: row.usage === null ? undefined : (JSON.parse(row.usage) as TokenUsage),
         finishedAt: row.finished_at ?? undefined,
       };
     });
@@ -113,7 +113,7 @@ function perRunCsv(runs: ExportRun[]): string {
         run.url,
         run.kind,
         run.status,
-        run.output !== undefined ? JSON.stringify(run.output) : '',
+        run.output === undefined ? '' : JSON.stringify(run.output),
         run.failureReason ?? '',
       ]),
     );

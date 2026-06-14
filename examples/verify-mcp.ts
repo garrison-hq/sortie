@@ -8,8 +8,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 let failures = 0;
+// `detail` can carry live page / LLM output; replace control characters so the
+// terminal can't be driven by escape sequences and log lines can't be forged.
+const sanitize = (s: string): string =>
+  [...s].map((c) => (c.charCodeAt(0) < 0x20 ? ' ' : c)).join('');
 function check(label: string, ok: boolean, detail = '') {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
+  const suffix = detail ? ` — ${sanitize(detail)}` : '';
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${sanitize(label)}${suffix}`);
   if (!ok) failures++;
 }
 

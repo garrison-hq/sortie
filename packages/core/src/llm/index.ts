@@ -54,15 +54,15 @@ export function createProvider(cfg: Partial<ProviderConfig> = {}): LlmProvider {
     const model = cfg.model ?? readEnv('OPENAI_MODEL') ?? DEFAULT_OPENAI_MODEL;
     let apiKey = cfg.apiKey ?? readEnv('OPENAI_API_KEY');
     if (apiKey === undefined) {
-      if (baseUrl !== DEFAULT_OPENAI_BASE_URL) {
-        // Local/self-hosted OpenAI-compatible endpoints (Ollama, vLLM, ...)
-        // don't require a real key, but the SDK requires a non-empty value.
-        apiKey = 'local';
-      } else {
+      if (baseUrl === DEFAULT_OPENAI_BASE_URL) {
         throw new Error(
           'Missing OpenAI API key: set the OPENAI_API_KEY environment variable, or pass apiKey in the provider config. ' +
             '(When targeting a local OpenAI-compatible endpoint such as Ollama or vLLM, set OPENAI_BASE_URL instead — no key is required then.)',
         );
+      } else {
+        // Local/self-hosted OpenAI-compatible endpoints (Ollama, vLLM, ...)
+        // don't require a real key, but the SDK requires a non-empty value.
+        apiKey = 'local';
       }
     }
     return new OpenAiProvider({ apiKey, model, baseUrl });

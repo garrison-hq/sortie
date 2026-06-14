@@ -22,6 +22,55 @@ interface Screenshot {
   url: string;
 }
 
+function emptyTimelineText(record: RunRecord, inFlight: boolean): string {
+  if (inFlight) return 'Waiting for the first step…';
+  if (record.spec.kind === 'agent') return 'No steps recorded.';
+  return `${record.spec.kind === 'fetch' ? 'Fetch' : 'Extract'} runs have no agent steps.`;
+}
+
+interface OutputPaneProps {
+  record: RunRecord;
+  outputJson: string | null;
+  inFlight: boolean;
+  copied: boolean;
+  onCopy: (json: string) => void;
+}
+
+/** The left-pane output region: successful output (with copy), an in-progress
+ * placeholder, or the failure reason. */
+function OutputPane({ record, outputJson, inFlight, copied, onCopy }: OutputPaneProps) {
+  if (record.status === 'success' && outputJson !== null) {
+    return (
+      <>
+        <h2 className="pane-title">
+          Output
+          <span className="spacer" />
+          <button type="button" className="btn btn-small" onClick={() => onCopy(outputJson)}>
+            {copied ? 'Copied ✓' : 'Copy'}
+          </button>
+        </h2>
+        <pre className="json">{outputJson}</pre>
+      </>
+    );
+  }
+  if (record.failureReason === undefined) {
+    return (
+      <>
+        <h2 className="pane-title">Output</h2>
+        <div className="hint">
+          {inFlight ? 'Run in progress — output appears here when it finishes.' : '—'}
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      <h2 className="pane-title">Failure reason</h2>
+      <div className="failure-box">{record.failureReason}</div>
+    </>
+  );
+}
+
 /**
  * Live run view: header (status/duration), latest screenshot + final output
  * on the left, the step timeline on the right. Mounted with key={runId}, so
@@ -146,7 +195,7 @@ export function RunDetail({ runId }: { runId: string }) {
   /** Save this run's extract spec as a named, replayable query. */
   async function saveAsQuery(): Promise<void> {
     if (!record) return;
-    const name = window.prompt('Query name (lowercase letters, digits, "-" and "_"):', '');
+    const name = globalThis.prompt('Query name (lowercase letters, digits, "-" and "_"):', '');
     if (name === null || name === '') return;
     if (!isSlug(name)) {
       setError(`"${name}" is not a valid query name (lowercase slug, max 64 chars).`);
@@ -195,8 +244,8 @@ export function RunDetail({ runId }: { runId: string }) {
   }
 
   const durationMs =
-    record.startedAt !== undefined ? (record.finishedAt ?? now) - record.startedAt : undefined;
-  const outputJson = record.output !== undefined ? JSON.stringify(record.output, null, 2) : null;
+    record.startedAt === undefined ? undefined : (record.finishedAt ?? now) - record.startedAt;
+  const outputJson = record.output === undefined ? null : JSON.stringify(record.output, null, 2);
 
   return (
     <div>
@@ -223,14 +272,14 @@ export function RunDetail({ runId }: { runId: string }) {
         )}
         <span className="run-actions">
           {record.spec.kind === 'extract' &&
-            (savedQueryName !== null ? (
-              <a className="btn btn-small" href="#/queries">
-                Saved as {savedQueryName} ✓
-              </a>
-            ) : (
+            (savedQueryName === null ? (
               <button type="button" className="btn btn-small" onClick={() => void saveAsQuery()}>
                 Save as query
               </button>
+            ) : (
+              <a className="btn btn-small" href="#/queries">
+                Saved as {savedQueryName} ✓
+              </a>
             ))}
           <button type="button" className="btn btn-small" onClick={downloadRunJson}>
             Download JSON
@@ -262,34 +311,13 @@ export function RunDetail({ runId }: { runId: string }) {
           </div>
 
           <div>
-            {record.status === 'success' && outputJson !== null ? (
-              <>
-                <h2 className="pane-title">
-                  Output
-                  <span className="spacer" />
-                  <button
-                    type="button"
-                    className="btn btn-small"
-                    onClick={() => copyOutput(outputJson)}
-                  >
-                    {copied ? 'Copied ✓' : 'Copy'}
-                  </button>
-                </h2>
-                <pre className="json">{outputJson}</pre>
-              </>
-            ) : record.failureReason !== undefined ? (
-              <>
-                <h2 className="pane-title">Failure reason</h2>
-                <div className="failure-box">{record.failureReason}</div>
-              </>
-            ) : (
-              <>
-                <h2 className="pane-title">Output</h2>
-                <div className="hint">
-                  {inFlight ? 'Run in progress — output appears here when it finishes.' : '—'}
-                </div>
-              </>
-            )}
+            <OutputPane
+              record={record}
+              outputJson={outputJson}
+              inFlight={inFlight}
+              copied={copied}
+              onCopy={copyOutput}
+            />
           </div>
         </div>
 
@@ -301,13 +329,7 @@ export function RunDetail({ runId }: { runId: string }) {
             </h2>
             <div className="timeline" ref={timelineRef} onScroll={onTimelineScroll}>
               {steps.length === 0 ? (
-                <div className="timeline-empty">
-                  {inFlight
-                    ? 'Waiting for the first step…'
-                    : record.spec.kind !== 'agent'
-                      ? `${record.spec.kind === 'fetch' ? 'Fetch' : 'Extract'} runs have no agent steps.`
-                      : 'No steps recorded.'}
-                </div>
+                <div className="timeline-empty">{emptyTimelineText(record, inFlight)}</div>
               ) : (
                 steps.map((step) => <StepItem key={step.index} step={step} />)
               )}

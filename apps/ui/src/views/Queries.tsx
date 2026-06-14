@@ -38,9 +38,9 @@ export function Queries() {
     setBusy(name);
     setError(null);
     try {
-      const overrides = urlOverride !== undefined ? { url: urlOverride } : undefined;
+      const overrides = urlOverride === undefined ? undefined : { url: urlOverride };
       const record = await runQuery(name, overrides);
-      window.location.hash = `#/runs/${record.id}`;
+      globalThis.location.hash = `#/runs/${record.id}`;
     } catch (err) {
       setError(messageOf(err));
       setBusy(null);
@@ -48,7 +48,7 @@ export function Queries() {
   }
 
   async function remove(name: string): Promise<void> {
-    if (!window.confirm(`Delete saved query "${name}"? Past runs keep their results.`)) return;
+    if (!globalThis.confirm(`Delete saved query "${name}"? Past runs keep their results.`)) return;
     setBusy(name);
     setError(null);
     try {
@@ -71,14 +71,14 @@ export function Queries() {
     <div>
       <h1 className="page-title">Saved queries</h1>
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
-      {queries === null ? (
-        <div className="loading">Loading queries…</div>
-      ) : queries.length === 0 ? (
+      {queries === null && <div className="loading">Loading queries…</div>}
+      {queries !== null && queries.length === 0 && (
         <div className="empty-state">
           No saved queries yet — save one from <a href="#/new">a new extract run</a>, a finished
           run's detail page, or <code>sortie query save</code>.
         </div>
-      ) : (
+      )}
+      {queries !== null && queries.length > 0 && (
         <table className="runs-table queries-table">
           <thead>
             <tr>
@@ -98,7 +98,7 @@ export function Queries() {
                 </td>
                 <td className="cell-dim">{query.runCount}</td>
                 <td className="cell-dim">
-                  {query.lastRunAt !== undefined ? relativeTime(query.lastRunAt, now) : '—'}
+                  {query.lastRunAt === undefined ? '—' : relativeTime(query.lastRunAt, now)}
                 </td>
                 <td>
                   <div className="row-actions">

@@ -13,7 +13,7 @@ describe('isSlug', () => {
       '',
       '../etc/passwd',
       'a/b',
-      'a\\b',
+      String.raw`a\b`,
       'a.b',
       '.hidden',
       '-leading-dash',

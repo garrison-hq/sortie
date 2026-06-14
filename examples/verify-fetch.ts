@@ -22,7 +22,8 @@ let failures = 0;
 function check(label: string, ok: boolean, detail?: string): void {
   const status = ok ? 'PASS' : 'FAIL';
   if (!ok) failures += 1;
-  console.log(`[${status}] ${label}${detail ? ` — ${detail}` : ''}`);
+  const suffix = detail ? ` — ${detail}` : '';
+  console.log(`[${status}] ${label}${suffix}`);
 }
 
 async function main(): Promise<void> {
@@ -90,7 +91,9 @@ async function main(): Promise<void> {
   process.exitCode = failures === 0 ? 0 : 1;
 }
 
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (err: unknown) {
   console.error('verify-fetch failed:', err instanceof Error ? (err.stack ?? err.message) : err);
   process.exit(1);
-});
+}

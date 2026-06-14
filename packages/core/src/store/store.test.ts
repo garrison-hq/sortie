@@ -54,7 +54,7 @@ describe('createRunStore', () => {
         goal: 'buy a book',
         maxSteps: 7,
         credentialNames: ['SHOP_PASSWORD'],
-        storageStatePath: '/tmp/state.json',
+        storageStatePath: 'state.json',
       });
       const created = store.createRun(spec, 'batch-1');
 

@@ -218,7 +218,7 @@ export function createRunQueue(
   const idleWaiters: Array<() => void> = [];
 
   function emit(ev: RunEvent): void {
-    for (const listener of [...listeners]) {
+    for (const listener of listeners) {
       try {
         listener(ev);
       } catch {
@@ -281,7 +281,9 @@ export function createRunQueue(
         return;
       }
       active++;
-      void runItem(item).finally(() => {
+      // Fire-and-forget: runItem never rejects (it catches internally), so
+      // finally() simply drives the pump forward as each item settles.
+      runItem(item).finally(() => {
         active--;
         settleWaiters();
         pump();

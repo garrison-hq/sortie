@@ -16,13 +16,15 @@
  * loads exactly two pages in a single run — keep it that way.
  */
 import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 // Import the built package directly (the repo root is not a workspace consumer
 // of @garrison-hq/sortie, so the bare specifier is not resolvable from examples/).
 import { createProvider, runAgent, jsonSchemaToZod } from '../packages/core/dist/index.js';
 import type { StepRecord } from '../packages/core/dist/index.js';
 
 const START_URL = 'https://news.ycombinator.com';
-const OUT_PATH = '/tmp/sortie-hn-digest.json';
+const OUT_PATH = join(tmpdir(), 'sortie-hn-digest.json');
 const STORY_COUNT = 12;
 
 // The output contract as plain JSON Schema (what a CLI/API caller would send),
@@ -69,7 +71,8 @@ interface Story {
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = ''): void {
-  console.log(`[${ok ? 'PASS' : 'FAIL'}] ${label}${detail ? ` — ${detail}` : ''}`);
+  const suffix = detail ? ` — ${detail}` : '';
+  console.log(`[${ok ? 'PASS' : 'FAIL'}] ${label}${suffix}`);
   if (!ok) failures += 1;
 }
 
@@ -204,7 +207,9 @@ async function main(): Promise<void> {
   process.exitCode = failures === 0 ? 0 : 1;
 }
 
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (err: unknown) {
   console.error('demo-hn-digest failed:', err instanceof Error ? (err.stack ?? err.message) : err);
   process.exit(1);
-});
+}

@@ -65,9 +65,9 @@ export class OpenAiProvider implements LlmProvider {
       ...(req.tools !== undefined && req.tools.length > 0
         ? { tools: req.tools.map(toOpenAiTool) }
         : {}),
-      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
-      ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
+      ...(req.maxTokens === undefined ? {} : { max_tokens: req.maxTokens }),
+      ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
     });
 
     const choice = completion.choices[0];

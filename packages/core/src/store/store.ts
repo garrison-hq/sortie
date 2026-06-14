@@ -189,7 +189,7 @@ export function createRunStore(dbPath?: string): RunStore {
         startedAt: patch.startedAt ?? existing.startedAt,
         finishedAt: patch.finishedAt ?? existing.finishedAt,
         // `output` may legitimately be null/false/0 — only `undefined` means "unchanged".
-        output: patch.output !== undefined ? patch.output : existing.output,
+        output: patch.output === undefined ? existing.output : patch.output,
         failureReason: patch.failureReason ?? existing.failureReason,
         usage: patch.usage ?? existing.usage,
         finalUrl: patch.finalUrl ?? existing.finalUrl,
@@ -200,7 +200,7 @@ export function createRunStore(dbPath?: string): RunStore {
         next.attempts,
         next.startedAt ?? null,
         next.finishedAt ?? null,
-        next.output !== undefined ? JSON.stringify(next.output) : null,
+        next.output === undefined ? null : JSON.stringify(next.output),
         next.failureReason ?? null,
         next.usage ? JSON.stringify(next.usage) : null,
         next.finalUrl ?? null,
@@ -387,9 +387,9 @@ function rowToRecord(row: RunRow): RunRecord {
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
-    output: row.output !== null ? (JSON.parse(row.output) as unknown) : undefined,
+    output: row.output === null ? undefined : (JSON.parse(row.output) as unknown),
     failureReason: row.failure_reason ?? undefined,
-    usage: row.usage !== null ? (JSON.parse(row.usage) as TokenUsage) : undefined,
+    usage: row.usage === null ? undefined : (JSON.parse(row.usage) as TokenUsage),
     finalUrl: row.final_url ?? undefined,
   };
 }

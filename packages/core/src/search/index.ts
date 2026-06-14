@@ -54,7 +54,7 @@ function toAbsoluteHttpUrl(value: string): string | undefined {
   return parsed.toString();
 }
 
-const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+const collapse = (s: string): string => s.replaceAll(/\s+/g, ' ').trim();
 
 /**
  * Normalize raw backend results: keep absolute http(s) URLs only, dedupe by

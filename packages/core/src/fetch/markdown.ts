@@ -116,7 +116,7 @@ export function extractArticle(html: string, url: string): ArticleContent | unde
 export function stripBoilerplate(html: string, url: string): string {
   const { document } = parseHTML(html);
   for (const tag of BOILERPLATE_TAGS) {
-    for (const el of [...document.querySelectorAll(tag)]) {
+    for (const el of document.querySelectorAll(tag)) {
       el.remove();
     }
   }
@@ -150,7 +150,7 @@ export function collectLinks(html: string, baseUrl: string): { text: string; url
     if (seen.has(resolved.href)) continue;
     seen.add(resolved.href);
 
-    const text = (anchor.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const text = (anchor.textContent ?? '').replaceAll(/\s+/g, ' ').trim();
     links.push({ text, url: resolved.href });
   }
 
@@ -163,16 +163,24 @@ export function collectLinks(html: string, baseUrl: string): { text: string; url
  * Best-effort by design — the markdown is the canonical representation.
  */
 export function markdownToText(markdown: string): string {
-  return markdown
-    .replace(/```[^\n]*\n([\s\S]*?)```/g, '$1') // fenced code -> contents
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images -> alt text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> label
-    .replace(/^#{1,6}\s+/gm, '') // heading markers
-    .replace(/^>\s?/gm, '') // blockquote markers
-    .replace(/^[-*_]{3,}\s*$/gm, '') // horizontal rules
-    .replace(/(\*\*|__)([^*_]+)\1/g, '$2') // bold
-    .replace(/(\*|_)([^*_]+)\1/g, '$2') // italics
-    .replace(/`([^`]+)`/g, '$1') // inline code
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return (
+    markdown
+      // Lazy match to the closing fence: linear on unmatched input, no nested
+      // quantifier — the sonarjs/slow-regex heuristic flags it defensively.
+      // eslint-disable-next-line sonarjs/slow-regex -- lazy, single-pass; not ReDoS-prone
+      .replaceAll(/```[^\n]*\n([\s\S]*?)```/g, '$1') // fenced code -> contents
+      .replaceAll(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images -> alt text
+      // Bounded negated character classes ([^\]]*, [^)]*): linear, no backtracking
+      // ambiguity. Flagged defensively by sonarjs/slow-regex.
+      // eslint-disable-next-line sonarjs/slow-regex -- bounded negated classes; not ReDoS-prone
+      .replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> label
+      .replaceAll(/^#{1,6}\s+/gm, '') // heading markers
+      .replaceAll(/^>\s?/gm, '') // blockquote markers
+      .replaceAll(/^[-*_]{3,}\s*$/gm, '') // horizontal rules
+      .replaceAll(/(\*\*|__)([^*_]+)\1/g, '$2') // bold
+      .replaceAll(/([*_])([^*_]+)\1/g, '$2') // italics
+      .replaceAll(/`([^`]+)`/g, '$1') // inline code
+      .replaceAll(/\n{3,}/g, '\n\n')
+      .trim()
+  );
 }

@@ -61,7 +61,7 @@ import { persistProfileState, summarizeProfileState } from './profiles.js';
 import { createRunStore, prepareSavedQueryRun } from './store/index.js';
 import { createRunQueue } from './runtime/index.js';
 
-const HELP = `sortie — semantic web extraction & web agents
+const HELP = String.raw`sortie — semantic web extraction & web agents
 
 Usage:
   sortie extract <url> --schema <inline-JSON-or-@file> [options]
@@ -181,13 +181,13 @@ Environment:
   CAPTCHA-free); otherwise search falls back to a browser-engine chain.
 
 Examples:
-  sortie extract https://books.toscrape.com \\
-    --schema '{"type":"object","properties":{"books":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}},"required":["title","price"]}}},"required":["books"]}' \\
+  sortie extract https://books.toscrape.com \
+    --schema '{"type":"object","properties":{"books":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"price":{"type":"number"}},"required":["title","price"]}}},"required":["books"]}' \
     --instruction "the list of books on the page"
 
-  SAUCE_PASSWORD=... sortie agent https://www.saucedemo.com \\
-    --goal "log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total" \\
-    --cred SAUCE_PASSWORD \\
+  SAUCE_PASSWORD=... sortie agent https://www.saucedemo.com \
+    --goal "log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total" \
+    --cred SAUCE_PASSWORD \
     --schema '{"type":"object","properties":{"total":{"type":"string"}},"required":["total"]}'
 
   sortie search "playwright storage state docs" --max-results 5
@@ -342,7 +342,7 @@ function formatStepLine(step: StepRecord): string {
     input = `${input.slice(0, INPUT_PREVIEW_CHARS)}…`;
   }
   const observation = step.observation
-    .replace(/\s+/g, ' ')
+    .replaceAll(/\s+/g, ' ')
     .trim()
     .slice(0, OBSERVATION_PREVIEW_CHARS);
   // StepRecord.index is 0-based; display 1-based for humans.
@@ -405,6 +405,85 @@ async function runExtractCommand(url: string, values: CliValues): Promise<void> 
   }
 }
 
+/** Validate the optional --max-steps flag, returning its parsed value. */
+function parseMaxStepsFlag(values: CliValues): number | undefined {
+  if (values['max-steps'] === undefined) return undefined;
+  const maxSteps = Number(values['max-steps']);
+  if (!Number.isInteger(maxSteps) || maxSteps <= 0) {
+    usageError(`--max-steps must be a positive integer (got "${values['max-steps']}").`);
+  }
+  return maxSteps;
+}
+
+/**
+ * Resolve credential values from the environment. Values are passed to the
+ * agent executor only — they are never printed, logged, or sent to the model.
+ */
+function resolveCredentials(values: CliValues): Record<string, string> | undefined {
+  if (values.cred === undefined || values.cred.length === 0) return undefined;
+  const credentials: Record<string, string> = {};
+  for (const name of values.cred) {
+    const value = process.env[name];
+    if (value === undefined) {
+      usageError(`--cred ${name}: environment variable "${name}" is not set.`);
+    }
+    credentials[name] = value;
+  }
+  return credentials;
+}
+
+type AgentResult = Awaited<ReturnType<typeof runAgent>>;
+
+/** Report a non-successful agent run to stderr (returns exit code 1). */
+function reportAgentFailure(result: AgentResult, saveProfile: string | undefined): number {
+  const reason = (result.failureReason ?? 'no reason given').replaceAll(/\s+/g, ' ').trim();
+  process.stderr.write(`Agent ${result.status} after ${result.steps.length} step(s): ${reason}\n`);
+  if (saveProfile !== undefined) {
+    process.stderr.write(`Profile "${saveProfile}" NOT saved (run did not succeed).\n`);
+  }
+  return 1;
+}
+
+/**
+ * Persist the session as a profile after a successful run — a failed login
+ * must never overwrite (or create) a profile with a broken state.
+ */
+async function saveAgentProfile(
+  saveProfile: string,
+  page: Page,
+  result: AgentResult,
+  values: CliValues,
+): Promise<void> {
+  const store = openRunStore(values);
+  try {
+    const statePath = store.profileStatePath(saveProfile);
+    await persistProfileState(page, statePath);
+    store.upsertProfile({
+      name: saveProfile,
+      domainHint: hostnameOf(result.finalUrl),
+      notes: values.notes,
+    });
+    process.stderr.write(`Saved profile "${saveProfile}" to ${statePath} (mode 0600).\n`);
+  } finally {
+    store.close();
+  }
+}
+
+/** Write a successful agent run's output to stdout (and --out) plus a summary. */
+function reportAgentSuccess(result: AgentResult, values: CliValues): void {
+  const output = JSON.stringify(result.output ?? null, null, 2);
+  process.stdout.write(`${output}\n`);
+
+  if (values.out) {
+    const outPath = resolve(values.out);
+    writeFileSync(outPath, `${output}\n`, 'utf8');
+    process.stderr.write(`Wrote output to ${outPath}\n`);
+  }
+  process.stderr.write(
+    `Done in ${result.steps.length} step(s). Tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out.\n`,
+  );
+}
+
 async function runAgentCommand(startUrl: string, values: CliValues): Promise<void> {
   if (!values.goal) {
     usageError('--goal is required for the agent command.');
@@ -419,29 +498,11 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
     );
   }
 
-  let maxSteps: number | undefined;
-  if (values['max-steps'] !== undefined) {
-    maxSteps = Number(values['max-steps']);
-    if (!Number.isInteger(maxSteps) || maxSteps <= 0) {
-      usageError(`--max-steps must be a positive integer (got "${values['max-steps']}").`);
-    }
-  }
+  const maxSteps = parseMaxStepsFlag(values);
 
   loadDotEnv();
 
-  // Resolve credential values from the environment. Values are passed to the
-  // agent executor only — they are never printed, logged, or sent to the model.
-  let credentials: Record<string, string> | undefined;
-  if (values.cred !== undefined && values.cred.length > 0) {
-    credentials = {};
-    for (const name of values.cred) {
-      const value = process.env[name];
-      if (value === undefined) {
-        usageError(`--cred ${name}: environment variable "${name}" is not set.`);
-      }
-      credentials[name] = value;
-    }
-  }
+  const credentials = resolveCredentials(values);
 
   const schema: z.ZodType<unknown> | undefined = values.schema
     ? jsonSchemaToZod(loadSchemaArg(values.schema))
@@ -487,46 +548,15 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
     }
 
     if (result.status !== 'success') {
-      const reason = (result.failureReason ?? 'no reason given').replace(/\s*\n\s*/g, ' ').trim();
-      process.stderr.write(
-        `Agent ${result.status} after ${result.steps.length} step(s): ${reason}\n`,
-      );
-      if (saveProfile !== undefined) {
-        process.stderr.write(`Profile "${saveProfile}" NOT saved (run did not succeed).\n`);
-      }
-      exitCode = 1;
+      exitCode = reportAgentFailure(result, saveProfile);
     }
 
     if (exitCode === 0 && saveProfile !== undefined && page) {
-      // Persist the session only on success — a failed login must never
-      // overwrite (or create) a profile with a broken state.
-      const store = openRunStore(values);
-      try {
-        const statePath = store.profileStatePath(saveProfile);
-        await persistProfileState(page, statePath);
-        store.upsertProfile({
-          name: saveProfile,
-          domainHint: hostnameOf(result.finalUrl),
-          notes: values.notes,
-        });
-        process.stderr.write(`Saved profile "${saveProfile}" to ${statePath} (mode 0600).\n`);
-      } finally {
-        store.close();
-      }
+      await saveAgentProfile(saveProfile, page, result, values);
     }
 
     if (exitCode === 0) {
-      const output = JSON.stringify(result.output ?? null, null, 2);
-      process.stdout.write(`${output}\n`);
-
-      if (values.out) {
-        const outPath = resolve(values.out);
-        writeFileSync(outPath, `${output}\n`, 'utf8');
-        process.stderr.write(`Wrote output to ${outPath}\n`);
-      }
-      process.stderr.write(
-        `Done in ${result.steps.length} step(s). Tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out.\n`,
-      );
+      reportAgentSuccess(result, values);
     }
   } finally {
     if (manager) {
@@ -595,9 +625,9 @@ async function runSearchCommand(query: string, values: CliValues): Promise<void>
   loadDotEnv();
 
   const maxResults =
-    values['max-results'] !== undefined
-      ? parsePositiveInt(values['max-results'], '--max-results')
-      : undefined;
+    values['max-results'] === undefined
+      ? undefined
+      : parsePositiveInt(values['max-results'], '--max-results');
   const engines = parseEngines(values.engine);
 
   // The semantic SERP-parse fallback needs an LLM, but search must keep
@@ -641,25 +671,30 @@ function parseFetchFormat(value: string | undefined): FetchFormat {
   return value as FetchFormat;
 }
 
+/** Render a fetch result in the requested output format. */
+function formatFetchResult(
+  result: Awaited<ReturnType<typeof fetchPage>>,
+  format: FetchFormat,
+): string {
+  if (format === 'json') return JSON.stringify(result, null, 2);
+  if (format === 'text') return result.text;
+  return result.markdown;
+}
+
 async function runFetchCommand(url: string, values: CliValues): Promise<void> {
   loadDotEnv();
 
   const format = parseFetchFormat(values.format);
   const maxChars =
-    values['max-chars'] !== undefined
-      ? parsePositiveInt(values['max-chars'], '--max-chars')
-      : undefined;
+    values['max-chars'] === undefined
+      ? undefined
+      : parsePositiveInt(values['max-chars'], '--max-chars');
 
   process.stderr.write(`Fetching ${url} ...\n`);
 
   const result = await fetchPage({ url, maxChars, headless: !values.headful });
 
-  const output =
-    format === 'json'
-      ? JSON.stringify(result, null, 2)
-      : format === 'text'
-        ? result.text
-        : result.markdown;
+  const output = formatFetchResult(result, format);
   process.stdout.write(`${output}\n`);
 
   if (values.out) {
@@ -761,6 +796,60 @@ function validateSpec(value: unknown): string[] {
   return errors;
 }
 
+interface SpecParseResult {
+  specs: RunSpec[];
+  errors: string[];
+}
+
+/** Parse a .jsonl specs body: one spec per non-blank line. */
+function parseJsonlSpecs(raw: string): SpecParseResult {
+  const errors: string[] = [];
+  const specs: RunSpec[] = [];
+  raw.split('\n').forEach((line, i) => {
+    if (line.trim() === '') return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      errors.push(
+        `line ${i + 1}: invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    const problems = validateSpec(parsed);
+    if (problems.length > 0) {
+      errors.push(...problems.map((p) => `line ${i + 1}: ${p}`));
+    } else {
+      specs.push(parsed as RunSpec);
+    }
+  });
+  return { specs, errors };
+}
+
+/** Parse a .json specs body: a top-level JSON array of specs. */
+function parseJsonArraySpecs(raw: string, filePath: string): SpecParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    usageError(`invalid JSON in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    usageError(`${filePath} must contain a JSON array of run specs.`);
+  }
+  const errors: string[] = [];
+  const specs: RunSpec[] = [];
+  parsed.forEach((entry: unknown, i: number) => {
+    const problems = validateSpec(entry);
+    if (problems.length > 0) {
+      errors.push(...problems.map((p) => `entry ${i + 1}: ${p}`));
+    } else {
+      specs.push(entry as RunSpec);
+    }
+  });
+  return { specs, errors };
+}
+
 /**
  * Load and minimally validate a specs file (.json array or .jsonl).
  * Prints every problem with its line/entry number and exits 2 on any error.
@@ -781,49 +870,8 @@ function loadSpecsFile(specsFile: string): RunSpec[] {
     );
   }
 
-  const errors: string[] = [];
-  const specs: RunSpec[] = [];
-
-  if (ext === '.jsonl') {
-    raw.split('\n').forEach((line, i) => {
-      if (line.trim() === '') return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (err) {
-        errors.push(
-          `line ${i + 1}: invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return;
-      }
-      const problems = validateSpec(parsed);
-      if (problems.length > 0) {
-        errors.push(...problems.map((p) => `line ${i + 1}: ${p}`));
-      } else {
-        specs.push(parsed as RunSpec);
-      }
-    });
-  } else {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      usageError(
-        `invalid JSON in ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    if (!Array.isArray(parsed)) {
-      usageError(`${filePath} must contain a JSON array of run specs.`);
-    }
-    parsed.forEach((entry: unknown, i: number) => {
-      const problems = validateSpec(entry);
-      if (problems.length > 0) {
-        errors.push(...problems.map((p) => `entry ${i + 1}: ${p}`));
-      } else {
-        specs.push(entry as RunSpec);
-      }
-    });
-  }
+  const { specs, errors } =
+    ext === '.jsonl' ? parseJsonlSpecs(raw) : parseJsonArraySpecs(raw, filePath);
 
   if (errors.length > 0) {
     process.stderr.write(`Error: invalid specs in ${filePath}:\n`);
@@ -887,9 +935,9 @@ async function runBatchCommand(specsFile: string, values: CliValues): Promise<vo
   warnMissingCredentialEnv(specs);
 
   const concurrency =
-    values.concurrency !== undefined
-      ? parsePositiveInt(values.concurrency, '--concurrency')
-      : undefined;
+    values.concurrency === undefined
+      ? undefined
+      : parsePositiveInt(values.concurrency, '--concurrency');
   // Validate the export target up front so a bad extension fails before any work.
   const exportPath = values.export ? resolve(values.export) : undefined;
   const exportFormat = exportPath ? exportFormatFromPath(exportPath, '--export') : undefined;
@@ -961,7 +1009,7 @@ function runRunsListCommand(values: CliValues): void {
     ].join('  ');
     process.stdout.write(`${header}\n`);
     for (const run of runs) {
-      const finished = run.finishedAt !== undefined ? new Date(run.finishedAt).toISOString() : '-';
+      const finished = run.finishedAt === undefined ? '-' : new Date(run.finishedAt).toISOString();
       const row = [
         shortRunId(run.id).padEnd(SHORT_RUN_ID_CHARS),
         run.spec.kind.padEnd(7),
@@ -1074,38 +1122,50 @@ function requireSlugName(context: string, name: string | undefined): string {
   return name;
 }
 
+/** Build a saved-query spec inline from --url/--schema/--instruction. */
+function buildInlineQuerySpec(values: CliValues): RunSpec {
+  if (!values.url || !values.schema) {
+    usageError('query save: --url and --schema are required (or use --from-run <id>).');
+  }
+  return {
+    kind: 'extract',
+    url: values.url,
+    schemaJson: loadSchemaArg(values.schema),
+    ...(values.instruction === undefined ? {} : { instruction: values.instruction }),
+  };
+}
+
+/**
+ * Build a saved-query spec by copying an existing extract run's spec, dropping
+ * any link-back to the query it was replayed from; --url/--instruction/--schema
+ * override the copied fields.
+ */
+function buildQuerySpecFromRun(store: RunStore, fromRun: string, values: CliValues): RunSpec {
+  const { record, error } = findRunByIdOrPrefix(store, fromRun);
+  if (!record) {
+    throw new Error(error ?? `run "${fromRun}" not found.`);
+  }
+  if (record.spec.kind !== 'extract') {
+    throw new Error(
+      `run ${shortRunId(record.id)} is a ${record.spec.kind} run — only extract runs can be saved as queries.`,
+    );
+  }
+  const spec: RunSpec = { ...record.spec };
+  delete spec.queryName;
+  if (values.url !== undefined) spec.url = values.url;
+  if (values.instruction !== undefined) spec.instruction = values.instruction;
+  if (values.schema !== undefined) spec.schemaJson = loadSchemaArg(values.schema);
+  return spec;
+}
+
 function runQuerySaveCommand(name: string, values: CliValues): void {
   const store = openRunStore(values);
   try {
-    let spec: RunSpec;
-    if (values['from-run'] !== undefined) {
-      const { record, error } = findRunByIdOrPrefix(store, values['from-run']);
-      if (!record) {
-        throw new Error(error ?? `run "${values['from-run']}" not found.`);
-      }
-      if (record.spec.kind !== 'extract') {
-        throw new Error(
-          `run ${shortRunId(record.id)} is a ${record.spec.kind} run — only extract runs can be saved as queries.`,
-        );
-      }
-      // Copy the run's spec, dropping any link-back to the query it was
-      // itself replayed from; --url/--instruction/--schema override the copy.
-      spec = { ...record.spec };
-      delete spec.queryName;
-      if (values.url !== undefined) spec.url = values.url;
-      if (values.instruction !== undefined) spec.instruction = values.instruction;
-      if (values.schema !== undefined) spec.schemaJson = loadSchemaArg(values.schema);
-    } else {
-      if (!values.url || !values.schema) {
-        usageError('query save: --url and --schema are required (or use --from-run <id>).');
-      }
-      spec = {
-        kind: 'extract',
-        url: values.url,
-        schemaJson: loadSchemaArg(values.schema),
-        ...(values.instruction !== undefined ? { instruction: values.instruction } : {}),
-      };
-    }
+    const fromRun = values['from-run'];
+    const spec =
+      fromRun === undefined
+        ? buildInlineQuerySpec(values)
+        : buildQuerySpecFromRun(store, fromRun, values);
 
     const saved = store.createQuery(name, spec);
     process.stderr.write(`Saved query "${saved.name}" (${saved.spec.kind} ${saved.spec.url}).\n`);
@@ -1131,7 +1191,7 @@ function runQueryListCommand(values: CliValues): void {
     ].join('  ');
     process.stdout.write(`${header}\n`);
     for (const query of queries) {
-      const lastRun = query.lastRunAt !== undefined ? new Date(query.lastRunAt).toISOString() : '-';
+      const lastRun = query.lastRunAt === undefined ? '-' : new Date(query.lastRunAt).toISOString();
       const row = [
         truncate(query.name, LIST_NAME_CHARS).padEnd(LIST_NAME_CHARS),
         query.spec.kind.padEnd(7),
@@ -1179,8 +1239,8 @@ async function runQueryRunCommand(name: string, values: CliValues): Promise<void
   let exitCode = 0;
   try {
     const spec = prepareSavedQueryRun(store, name, {
-      ...(values.url !== undefined ? { url: values.url } : {}),
-      ...(values.instruction !== undefined ? { instruction: values.instruction } : {}),
+      ...(values.url === undefined ? {} : { url: values.url }),
+      ...(values.instruction === undefined ? {} : { instruction: values.instruction }),
     });
 
     queue = createRunQueue(store, { concurrency: 1, provider });
@@ -1202,9 +1262,7 @@ async function runQueryRunCommand(name: string, values: CliValues): Promise<void
         process.stderr.write(`Wrote output to ${outPath}\n`);
       }
     } else {
-      const reason = (finished?.failureReason ?? 'no reason given')
-        .replace(/\s*\n\s*/g, ' ')
-        .trim();
+      const reason = (finished?.failureReason ?? 'no reason given').replaceAll(/\s+/g, ' ').trim();
       process.stderr.write(`Run ${finished?.status ?? 'unknown'}: ${reason}\n`);
       exitCode = 1;
     }
@@ -1356,7 +1414,7 @@ function runProfileListCommand(values: CliValues): void {
         domains = '(unreadable state file)';
       }
       const lastUsed =
-        profile.lastUsedAt !== undefined ? new Date(profile.lastUsedAt).toISOString() : '-';
+        profile.lastUsedAt === undefined ? '-' : new Date(profile.lastUsedAt).toISOString();
       const row = [
         truncate(profile.name, LIST_NAME_CHARS).padEnd(LIST_NAME_CHARS),
         cookies.padEnd(7),
@@ -1376,9 +1434,7 @@ function runProfileCheckCommand(name: string, values: CliValues): void {
   let errorMessage: string | undefined;
   try {
     const record = store.getProfile(name);
-    if (!record) {
-      errorMessage = `profile "${name}" not found.`;
-    } else {
+    if (record) {
       // Staleness summary only: counts, domains, expiry — never cookie
       // names or values.
       const state = summarizeProfileState(store.profileStatePath(name));
@@ -1392,6 +1448,8 @@ function runProfileCheckCommand(name: string, values: CliValues): void {
           `Warning: ${state.expiredCookieCount} cookie(s) already expired — the login may be stale.\n`,
         );
       }
+    } else {
+      errorMessage = `profile "${name}" not found.`;
     }
   } finally {
     store.close();
@@ -1451,11 +1509,10 @@ async function runProfileCommand(args: string[], values: CliValues): Promise<voi
   }
 }
 
-async function main(): Promise<void> {
-  let values: CliValues;
-  let positionals: string[];
+/** Parse argv into typed CLI values and positionals (usage error on failure). */
+function parseCliArgs(): { values: CliValues; positionals: string[] } {
   try {
-    ({ values, positionals } = parseArgs({
+    return parseArgs({
       args: process.argv.slice(2),
       allowPositionals: true,
       options: {
@@ -1487,10 +1544,77 @@ async function main(): Promise<void> {
         profile: { type: 'string' },
         'save-profile': { type: 'string' },
       },
-    }));
+    }) as { values: CliValues; positionals: string[] };
   } catch (err) {
     usageError(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * Require exactly one positional argument for a command, with command-specific
+ * "missing"/"extra arguments" usage errors; returns the single argument.
+ */
+function requireSingleArg(args: string[], missingMessage: string, extraSuffix = ''): string {
+  const value = args[0];
+  if (!value) {
+    usageError(missingMessage);
+  }
+  if (args.length > 1) {
+    usageError(`unexpected extra arguments: ${args.slice(1).join(' ')}${extraSuffix}`);
+  }
+  return value;
+}
+
+/** Dispatch a parsed command to its handler (usage error for unknown commands). */
+async function dispatchCommand(
+  command: string | undefined,
+  args: string[],
+  values: CliValues,
+): Promise<void> {
+  switch (command) {
+    case 'extract':
+    case 'agent': {
+      const missing =
+        command === 'agent' ? 'missing <startUrl> argument.' : 'missing <url> argument.';
+      const url = requireSingleArg(args, missing);
+      if (command === 'agent') {
+        await runAgentCommand(url, values);
+      } else {
+        await runExtractCommand(url, values);
+      }
+      return;
+    }
+    case 'search': {
+      const query = requireSingleArg(args, 'missing <query> argument.', ' (quote the query).');
+      await runSearchCommand(query, values);
+      return;
+    }
+    case 'fetch': {
+      const url = requireSingleArg(args, 'missing <url> argument.');
+      await runFetchCommand(url, values);
+      return;
+    }
+    case 'query':
+      await runQueryCommand(args, values);
+      return;
+    case 'profile':
+      await runProfileCommand(args, values);
+      return;
+    case 'batch': {
+      const specsFile = requireSingleArg(args, 'missing <specs-file> argument.');
+      await runBatchCommand(specsFile, values);
+      return;
+    }
+    case 'runs':
+      runRunsCommand(args, values);
+      return;
+    default:
+      usageError(command === undefined ? 'missing command.' : `unknown command "${command}".`);
+  }
+}
+
+async function main(): Promise<void> {
+  const { values, positionals } = parseCliArgs();
 
   if (values.help) {
     process.stdout.write(`${HELP}\n`);
@@ -1506,74 +1630,13 @@ async function main(): Promise<void> {
   }
 
   const [command, ...args] = positionals;
-  switch (command) {
-    case 'extract':
-    case 'agent': {
-      const url = args[0];
-      if (!url) {
-        usageError(
-          command === 'agent' ? 'missing <startUrl> argument.' : 'missing <url> argument.',
-        );
-      }
-      if (args.length > 1) {
-        usageError(`unexpected extra arguments: ${args.slice(1).join(' ')}`);
-      }
-      if (command === 'agent') {
-        await runAgentCommand(url, values);
-      } else {
-        await runExtractCommand(url, values);
-      }
-      return;
-    }
-    case 'search': {
-      const query = args[0];
-      if (!query) {
-        usageError('missing <query> argument.');
-      }
-      if (args.length > 1) {
-        usageError(`unexpected extra arguments: ${args.slice(1).join(' ')} (quote the query).`);
-      }
-      await runSearchCommand(query, values);
-      return;
-    }
-    case 'fetch': {
-      const url = args[0];
-      if (!url) {
-        usageError('missing <url> argument.');
-      }
-      if (args.length > 1) {
-        usageError(`unexpected extra arguments: ${args.slice(1).join(' ')}`);
-      }
-      await runFetchCommand(url, values);
-      return;
-    }
-    case 'query':
-      await runQueryCommand(args, values);
-      return;
-    case 'profile':
-      await runProfileCommand(args, values);
-      return;
-    case 'batch': {
-      const specsFile = args[0];
-      if (!specsFile) {
-        usageError('missing <specs-file> argument.');
-      }
-      if (args.length > 1) {
-        usageError(`unexpected extra arguments: ${args.slice(1).join(' ')}`);
-      }
-      await runBatchCommand(specsFile, values);
-      return;
-    }
-    case 'runs':
-      runRunsCommand(args, values);
-      return;
-    default:
-      usageError(command === undefined ? 'missing command.' : `unknown command "${command}".`);
-  }
+  await dispatchCommand(command, args, values);
 }
 
-main().catch((err: unknown) => {
-  const message = (err instanceof Error ? err.message : String(err)).replace(/\s*\n\s*/g, ' ');
+try {
+  await main();
+} catch (err: unknown) {
+  const message = (err instanceof Error ? err.message : String(err)).replaceAll(/\s+/g, ' ');
   process.stderr.write(`Error: ${message}\n`);
   process.exit(1);
-});
+}

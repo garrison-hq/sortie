@@ -182,7 +182,7 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         return false;
       };
 
-      const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+      const collapse = (s: string): string => s.replaceAll(/\s+/g, ' ').trim();
       const clip = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s);
 
       const deriveRole = (el: MinimalElement, tag: string): string => {
@@ -235,6 +235,45 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
       }> = [];
       let counter = 0;
 
+      // Resolved <input>/<select>/<textarea> value for the descriptor, with
+      // password values redacted to a mask and checkbox/radio values omitted
+      // (their state is carried by `checked`). Returns undefined when there is
+      // no value field to report.
+      const deriveValue = (el: MinimalElement, tag: string): string | undefined => {
+        if (tag !== 'input' && tag !== 'select' && tag !== 'textarea') return undefined;
+        if (typeof el.value !== 'string') return undefined;
+        const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : '';
+        if (type === 'password') {
+          // Redact: a non-empty mask signals "filled in" without leaking
+          // the value (or even its length).
+          return el.value.length > 0 ? passwordMask : '';
+        }
+        if (type === 'checkbox' || type === 'radio') return undefined;
+        return clip(el.value, NAME_LIMIT);
+      };
+
+      const deriveChecked = (el: MinimalElement): boolean =>
+        typeof el.checked === 'boolean' ? el.checked : el.getAttribute('aria-checked') === 'true';
+
+      const buildEntry = (el: MinimalElement, ref: string): (typeof elements)[number] => {
+        const tag = el.tagName.toLowerCase();
+        const role = deriveRole(el, tag);
+        const entry: (typeof elements)[number] = { ref, role, name: deriveName(el), tag };
+
+        // `href` on anchors is the resolved absolute URL.
+        if (tag === 'a' && typeof el.href === 'string' && el.href) {
+          entry.href = el.href;
+        }
+        const value = deriveValue(el, tag);
+        if (value !== undefined) entry.value = value;
+        if (role === 'checkbox' || role === 'radio') entry.checked = deriveChecked(el);
+        if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') {
+          entry.disabled = true;
+        }
+        if (isOverlay(el)) entry.overlay = true;
+        return entry;
+      };
+
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         if (!el || !isVisible(el)) continue;
@@ -242,56 +281,15 @@ export async function distillPage(page: Page): Promise<PageSnapshot> {
         counter += 1;
         const ref = 'e' + counter;
         el.setAttribute('data-nf-ref', ref);
-
-        const tag = el.tagName.toLowerCase();
-        const role = deriveRole(el, tag);
-
-        const entry: (typeof elements)[number] = {
-          ref,
-          role,
-          name: deriveName(el),
-          tag,
-        };
-
-        // `href` on anchors is the resolved absolute URL.
-        if (tag === 'a' && typeof el.href === 'string' && el.href) {
-          entry.href = el.href;
-        }
-        if (
-          (tag === 'input' || tag === 'select' || tag === 'textarea') &&
-          typeof el.value === 'string'
-        ) {
-          const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : '';
-          if (type === 'password') {
-            // Redact: a non-empty mask signals "filled in" without leaking
-            // the value (or even its length).
-            entry.value = el.value.length > 0 ? passwordMask : '';
-          } else if (type !== 'checkbox' && type !== 'radio') {
-            entry.value = clip(el.value, NAME_LIMIT);
-          }
-        }
-        if (role === 'checkbox' || role === 'radio') {
-          entry.checked =
-            typeof el.checked === 'boolean'
-              ? el.checked
-              : el.getAttribute('aria-checked') === 'true';
-        }
-        if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') {
-          entry.disabled = true;
-        }
-        if (isOverlay(el)) {
-          entry.overlay = true;
-        }
-
-        elements.push(entry);
+        elements.push(buildEntry(el, ref));
       }
 
       // (6) Visible page text, normalized and capped.
       const bodyText = doc.body && typeof doc.body.innerText === 'string' ? doc.body.innerText : '';
       let text = bodyText
-        .replace(/[^\S\n]+/g, ' ') // collapse spaces/tabs (keep newlines)
-        .replace(/ ?\n ?/g, '\n') // strip space padding around newlines
-        .replace(/\n{3,}/g, '\n\n') // collapse 3+ newlines
+        .replaceAll(/[^\S\n]+/g, ' ') // collapse spaces/tabs (keep newlines)
+        .replaceAll(/ ?\n ?/g, '\n') // strip space padding around newlines
+        .replaceAll(/\n{3,}/g, '\n\n') // collapse 3+ newlines
         .trim();
       if (text.length > TEXT_LIMIT) {
         text = text.slice(0, TEXT_LIMIT) + MARKER;
@@ -377,7 +375,5 @@ export function resolveRef(page: Page, ref: string): Locator {
 
 // Compile-time conformance with the shared contracts.
 import type { DistillPageFn, ResolveRefFn } from '../contracts.js';
-const _distillCheck: DistillPageFn = distillPage;
-const _resolveCheck: ResolveRefFn = resolveRef;
-void _distillCheck;
-void _resolveCheck;
+distillPage satisfies DistillPageFn;
+resolveRef satisfies ResolveRefFn;

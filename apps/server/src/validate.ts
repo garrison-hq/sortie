@@ -38,19 +38,26 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Validate an untrusted RunSpec value; returns problems ([] = valid). */
-export function validateRunSpec(value: unknown): string[] {
-  if (!isRecord(value)) return ['spec must be a JSON object'];
-  const errors: string[] = [];
+/** True when `value` is a positive integer (> 0). */
+function isPositiveInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
 
+/** True when `value` is a non-empty string (after trimming). */
+function isNonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/** Validate the `kind`/`url`/`goal`/`schemaJson` fields keyed off `kind`. */
+function validateRunSpecKind(value: Record<string, unknown>, errors: string[]): void {
   const kind = value['kind'];
   if (!(RUN_KINDS as readonly unknown[]).includes(kind)) {
     errors.push(`kind must be one of ${RUN_KINDS.join('|')} (got ${JSON.stringify(kind)})`);
   }
-  if (typeof value['url'] !== 'string' || value['url'].trim() === '') {
+  if (!isNonEmptyString(value['url'])) {
     errors.push('url must be a non-empty string');
   }
-  if (kind === 'agent' && (typeof value['goal'] !== 'string' || value['goal'].trim() === '')) {
+  if (kind === 'agent' && !isNonEmptyString(value['goal'])) {
     errors.push('goal (non-empty string) is required when kind is "agent"');
   }
   if (kind === 'extract' && !isRecord(value['schemaJson'])) {
@@ -58,29 +65,39 @@ export function validateRunSpec(value: unknown): string[] {
   } else if (value['schemaJson'] !== undefined && !isRecord(value['schemaJson'])) {
     errors.push('schemaJson must be a JSON object when present');
   }
+}
+
+/** Validate the optional string/number/array fields of a RunSpec. */
+function validateRunSpecOptionals(value: Record<string, unknown>, errors: string[]): void {
   if (value['goal'] !== undefined && typeof value['goal'] !== 'string') {
     errors.push('goal must be a string when present');
   }
   if (value['instruction'] !== undefined && typeof value['instruction'] !== 'string') {
     errors.push('instruction must be a string when present');
   }
-  if (
-    value['maxSteps'] !== undefined &&
-    (typeof value['maxSteps'] !== 'number' ||
-      !Number.isInteger(value['maxSteps']) ||
-      value['maxSteps'] <= 0)
-  ) {
+  if (value['maxSteps'] !== undefined && !isPositiveInteger(value['maxSteps'])) {
     errors.push('maxSteps must be a positive integer when present');
   }
-  if (
-    value['credentialNames'] !== undefined &&
-    (!Array.isArray(value['credentialNames']) ||
-      !value['credentialNames'].every((name) => typeof name === 'string' && name.trim() !== ''))
-  ) {
+  if (value['credentialNames'] !== undefined && !isCredentialNameArray(value['credentialNames'])) {
     errors.push(
       'credentialNames must be an array of non-empty strings (env var NAMES) when present',
     );
   }
+  if (value['queryName'] !== undefined && typeof value['queryName'] !== 'string') {
+    errors.push('queryName must be a string when present');
+  }
+  if (value['maxChars'] !== undefined && !isPositiveInteger(value['maxChars'])) {
+    errors.push('maxChars must be a positive integer when present');
+  }
+}
+
+/** True when `value` is an array of non-empty strings. */
+function isCredentialNameArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((name) => isNonEmptyString(name));
+}
+
+/** Validate the `profile`/`storageStatePath` fields and their exclusivity. */
+function validateRunSpecProfile(value: Record<string, unknown>, errors: string[]): void {
   if (value['storageStatePath'] !== undefined && typeof value['storageStatePath'] !== 'string') {
     errors.push('storageStatePath must be a string when present');
   }
@@ -93,17 +110,15 @@ export function validateRunSpec(value: unknown): string[] {
   if (value['profile'] !== undefined && value['storageStatePath'] !== undefined) {
     errors.push('profile and storageStatePath are mutually exclusive — set one or the other');
   }
-  if (value['queryName'] !== undefined && typeof value['queryName'] !== 'string') {
-    errors.push('queryName must be a string when present');
-  }
-  if (
-    value['maxChars'] !== undefined &&
-    (typeof value['maxChars'] !== 'number' ||
-      !Number.isInteger(value['maxChars']) ||
-      value['maxChars'] <= 0)
-  ) {
-    errors.push('maxChars must be a positive integer when present');
-  }
+}
+
+/** Validate an untrusted RunSpec value; returns problems ([] = valid). */
+export function validateRunSpec(value: unknown): string[] {
+  if (!isRecord(value)) return ['spec must be a JSON object'];
+  const errors: string[] = [];
+  validateRunSpecKind(value, errors);
+  validateRunSpecOptionals(value, errors);
+  validateRunSpecProfile(value, errors);
   return errors;
 }
 
@@ -330,10 +345,10 @@ export function parseListQuery(query: Record<string, unknown>): ParsedListQuery 
 
   const status = readQueryParam(query, 'status', errors);
   if (status !== undefined) {
-    if (!(RUN_STATUSES as readonly string[]).includes(status)) {
-      errors.push(`status must be one of ${RUN_STATUSES.join('|')}`);
-    } else {
+    if ((RUN_STATUSES as readonly string[]).includes(status)) {
       opts.status = status as RunStatus;
+    } else {
+      errors.push(`status must be one of ${RUN_STATUSES.join('|')}`);
     }
   }
 
