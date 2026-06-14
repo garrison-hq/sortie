@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep SHA-pinned GitHub Actions current. Actions are pinned to full commit
+  # SHAs (supply-chain hardening); Dependabot bumps those SHAs and refreshes the
+  # trailing `# vX` comment so pinning stays low-maintenance.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
