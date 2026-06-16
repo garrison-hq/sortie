@@ -145,3 +145,4 @@ mouse/key/resume/cancel`.
 - 2026-06-16T21:35:47Z – claude:opus:reviewer:reviewer – shell_pid=332416 – Started review via action command
 - 2026-06-16T21:39:27Z – claude:opus:reviewer:reviewer – shell_pid=332416 – Moved to planned
 - 2026-06-16T21:40:10Z – claude:sonnet:implementer:implementer – shell_pid=340276 – Started implementation via action command
+- 2026-06-16T21:46:37Z – claude:sonnet:implementer:implementer – shell_pid=340276 – Fixed cycle-1 security gaps: origin constraint, input status-gate, session teardown; added real scoping tests
