@@ -19,8 +19,8 @@ subtasks:
 - T029
 - T030
 - T031
-agent: "claude:sonnet:implementer:implementer"
-shell_pid: "370109"
+agent: "claude:opus:reviewer:reviewer"
+shell_pid: "380334"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/ui/src/
@@ -121,3 +121,4 @@ Run `spec-kitty agent action implement WP06 --agent <name>` (after WP01, WP05).
 
 - 2026-06-16T21:58:05Z – claude:sonnet:implementer:implementer – shell_pid=370109 – Started implementation via action command
 - 2026-06-16T22:05:37Z – claude:sonnet:implementer:implementer – shell_pid=370109 – Ready for review
+- 2026-06-16T22:06:10Z – claude:opus:reviewer:reviewer – shell_pid=380334 – Started review via action command
