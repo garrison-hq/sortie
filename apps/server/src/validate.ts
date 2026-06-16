@@ -20,6 +20,7 @@ import type {
 export const RUN_STATUSES = [
   'queued',
   'running',
+  'awaiting_human',
   'success',
   'failed',
   'max_steps',

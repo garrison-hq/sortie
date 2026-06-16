@@ -15,7 +15,27 @@ import type {
   StepRecord,
 } from '../contracts.js';
 import { FAILURE_REASON_CAPTCHA_UNSOLVED } from '../contracts.js';
+import { BrowserManager } from '../browser/index.js';
 import { createRunQueue, type ExecuteRunFn } from './queue.js';
+
+// ---------------------------------------------------------------------------
+// Module-level mock for detectChallengeOnPage (used by M-1 auto-resume tests).
+// Default: returns a "challenge present" detection so the poll watcher does NOT
+// auto-resume unless a specific test overrides it with mockResolvedValue(null).
+// ---------------------------------------------------------------------------
+vi.mock('../challenge/detect.js', () => ({
+  detectChallengeOnPage: vi.fn().mockResolvedValue({
+    detected: true,
+    family: 'recaptcha',
+    signal: 'g-recaptcha',
+    via: 'content',
+  }),
+  detectChallenge: vi.fn().mockReturnValue(null),
+  detectChallengeForEngine: vi.fn().mockReturnValue(null),
+  detectionToReason: vi.fn().mockReturnValue(''),
+}));
+
+import { detectChallengeOnPage } from '../challenge/detect.js';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -481,6 +501,17 @@ describe('createRunQueue', () => {
     via: 'content',
   };
 
+  /**
+   * Shared exec stub: pauses the run by calling the hook, then returns
+   * `awaiting_human` so `runItem` exits cleanly without closing the page.
+   * Used by timeout and poll-cleared tests.
+   */
+  const pauseAndYieldExec: ExecuteRunFn = async (_s, ctx) => {
+    const mockPage = makeMockPage();
+    await ctx.onAwaitingHuman!(mockPage, fakeDetection, 0);
+    return { status: 'awaiting_human', livePage: mockPage };
+  };
+
   it('T020-FR016 non-blocking: a paused run frees the worker slot so a second run completes', async () => {
     const store = createFakeStore();
 
@@ -532,15 +563,9 @@ describe('createRunQueue', () => {
   it('T020-timeout: an unsolved paused run ends failed/captcha_unsolved after the deadline', async () => {
     const store = createFakeStore();
 
-    const exec: ExecuteRunFn = async (s, ctx) => {
-      const mockPage = makeMockPage();
-      await ctx.onAwaitingHuman!(mockPage, fakeDetection, 0);
-      return { status: 'awaiting_human', livePage: mockPage };
-    };
-
     vi.useFakeTimers();
     try {
-      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, exec);
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, pauseAndYieldExec);
 
       const events: RunEvent[] = [];
       queue.onEvent((ev) => events.push(ev));
@@ -987,5 +1012,273 @@ describe('createRunQueue', () => {
 
     // injectedProvider must be undefined so runAgent stays lazy.
     expect(receivedInjected).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // H-1 — FR-003: fingerprintHygiene is wired to assist agent runs
+  //
+  // Uses an injected exec that directly inspects ctx.manager.newPage options,
+  // bypassing runAgent to avoid triggering challenge-detection mocks.
+  // ---------------------------------------------------------------------------
+
+  it('H1-hygiene-wiring: assist=true agent run passes fingerprintHygiene:true to manager.newPage', async () => {
+    const store = createFakeStore();
+
+    // Spy on BrowserManager.prototype.newPage to capture options, then succeed fast.
+    const mockPage = makeMockPage();
+    const spy = vi.spyOn(BrowserManager.prototype, 'newPage').mockImplementation(async () => {
+      // Return a minimal page stub; context.close() is used in executeAgent's finally.
+      return mockPage as unknown as ReturnType<BrowserManager['newPage']>;
+    });
+    // Prevent real Chromium launch and close.
+    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as never);
+    vi.spyOn(BrowserManager.prototype, 'close').mockResolvedValue(undefined);
+
+    try {
+      // Custom exec: opens a page via ctx.manager (real executeAgent path) and
+      // immediately closes it — records what fingerprintHygiene was passed.
+      const exec: ExecuteRunFn = async (s, ctx) => {
+        // Mirror executeAgent's page-creation call including the hygiene flag.
+        const page = await ctx.manager.newPage({
+          ...(s.assist === true ? { fingerprintHygiene: true } : {}),
+        });
+        await page.context().close();
+        return { status: 'success' };
+      };
+
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, exec);
+
+      // assist=true run.
+      const { id: idA } = queue.submit({
+        kind: 'agent',
+        url: 'https://agent.test/',
+        goal: 'do things',
+        assist: true,
+      });
+      await queue.drain();
+
+      // assist=false run.
+      const { id: idB } = queue.submit({
+        kind: 'agent',
+        url: 'https://agent.test/',
+        goal: 'do things',
+        assist: false,
+      });
+      await queue.drain();
+
+      expect(store.getRun(idA)?.status).toBe('success');
+      expect(store.getRun(idB)?.status).toBe('success');
+
+      // spy.mock.calls[0] → assist=true call; spy.mock.calls[1] → assist=false call.
+      const allCalls = spy.mock.calls;
+      expect(allCalls.length).toBeGreaterThanOrEqual(2);
+      // First call (assist=true): fingerprintHygiene must be true.
+      expect(allCalls[0]?.[0]?.fingerprintHygiene).toBe(true);
+      // Second call (assist=false): fingerprintHygiene must be absent/falsy.
+      expect(allCalls[1]?.[0]?.fingerprintHygiene).toBeFalsy();
+    } finally {
+      spy.mockRestore();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('H1-hygiene-real-exec: real executeAgent wires fingerprintHygiene when assist=true', async () => {
+    // This test uses the REAL defaultExecuteRun and verifies the wiring end-to-end.
+    // We spy on BrowserManager.prototype.newPage to capture the options, and stub
+    // everything else so no real browser/LLM is launched.
+    const store = createFakeStore();
+
+    const newPageOpts: Array<Parameters<BrowserManager['newPage']>[0]> = [];
+
+    // Fake page that navigates and distills cleanly, then the provider calls done.
+    function makeFakeRunPage() {
+      const fakeContext = {
+        close: vi.fn().mockResolvedValue(undefined),
+        storageState: vi.fn().mockResolvedValue({ cookies: [], origins: [] }),
+        on: vi.fn(),
+        newCDPSession: vi.fn(),
+      };
+      return {
+        url: () => 'https://agent.test/',
+        title: () => Promise.resolve('Test Page'),
+        // evaluate returns empty walker result (distillPage succeeds with no elements).
+        evaluate: vi.fn().mockResolvedValue({ elements: [], text: '' }),
+        context: () => fakeContext,
+        goto: vi.fn().mockResolvedValue(null),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    const pageStub = makeFakeRunPage();
+    const spy = vi.spyOn(BrowserManager.prototype, 'newPage').mockImplementation(async (opts) => {
+      newPageOpts.push(opts);
+      return pageStub as unknown as ReturnType<BrowserManager['newPage']>;
+    });
+    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as never);
+    vi.spyOn(BrowserManager.prototype, 'close').mockResolvedValue(undefined);
+
+    // detectChallengeOnPage: return null so the loop doesn't pause (assist path
+    // only checks when assistEnabled; with assist=true + no challenge the loop proceeds).
+    vi.mocked(detectChallengeOnPage).mockResolvedValue(null);
+
+    try {
+      const stubProvider: LlmProvider = {
+        id: 'stub:model',
+        chat: vi.fn().mockResolvedValue({
+          text: null,
+          toolCalls: [{ id: 'c1', name: 'done', input: { result: null } }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1 },
+        }),
+      };
+
+      // Real defaultExecuteRun (no injected exec).
+      const queue = makeQueue(store, {
+        perDomainIntervalMs: 0,
+        provider: stubProvider,
+        screenshots: { enabled: false },
+      });
+
+      const { id } = queue.submit({
+        kind: 'agent',
+        url: 'https://agent.test/',
+        goal: 'do things',
+        assist: true,
+      });
+      await queue.drain();
+
+      expect(store.getRun(id)?.status).toBe('success');
+      // Real executeAgent must have passed fingerprintHygiene:true to manager.newPage.
+      expect(newPageOpts.length).toBeGreaterThanOrEqual(1);
+      expect(newPageOpts[0]?.fingerprintHygiene).toBe(true);
+    } finally {
+      spy.mockRestore();
+      vi.mocked(detectChallengeOnPage).mockResolvedValue({
+        detected: true,
+        family: 'recaptcha',
+        signal: 'g-recaptcha',
+        via: 'content',
+      });
+      vi.restoreAllMocks();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // M-1 — FR-011: auto-resume-on-clear watcher
+  // ---------------------------------------------------------------------------
+
+  it('M1-auto-resume: a paused run auto-resumes (solveSource:auto) when the challenge clears', async () => {
+    const store = createFakeStore();
+    const mockDetect = vi.mocked(detectChallengeOnPage);
+
+    // The poll will find the page clear (null) on first detection tick.
+    mockDetect.mockResolvedValue(null);
+
+    let hookReturned = false;
+    const exec: ExecuteRunFn = async (_s, ctx) => {
+      const mockPage = makeMockPage();
+      await ctx.onAwaitingHuman!(mockPage, fakeDetection, 0);
+      hookReturned = true;
+      return { status: 'success' };
+    };
+
+    vi.useFakeTimers();
+    try {
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, exec);
+
+      let notifyFinished!: () => void;
+      const finishedSignal = new Promise<void>((r) => {
+        notifyFinished = r;
+      });
+      const events: RunEvent[] = [];
+      queue.onEvent((ev) => {
+        events.push(ev);
+        if (ev.type === 'run-finished') notifyFinished();
+      });
+
+      const { id } = queue.submit({
+        kind: 'agent',
+        url: 'https://captcha.test/',
+        goal: 'test',
+        assist: true,
+      });
+
+      // Drain microtasks so the hook suspends and pausedRuns is populated.
+      await vi.runAllTimersAsync();
+      // Fire the poll interval (1500ms).
+      await vi.advanceTimersByTimeAsync(1_600);
+      // Allow async poll (.then) to settle.
+      await vi.runAllTimersAsync();
+
+      vi.useRealTimers();
+      // Wait for the auto-resume to propagate to run-finished.
+      await finishedSignal;
+
+      expect(hookReturned).toBe(true);
+      expect(store.getRun(id)?.status).toBe('success');
+
+      const resumedEvent = events.find((ev) => ev.type === 'run-resumed');
+      expect(resumedEvent).toBeDefined();
+      expect((resumedEvent as Extract<RunEvent, { type: 'run-resumed' }>)?.solveSource).toBe(
+        'auto',
+      );
+      expect((resumedEvent as Extract<RunEvent, { type: 'run-resumed' }>)?.resolution).toBe(
+        'solved',
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(detectChallengeOnPage).mockReset().mockResolvedValue(null);
+    }
+  });
+
+  it('M1-poll-cleared-on-timeout: no auto-resume fires after the run times out', async () => {
+    const store = createFakeStore();
+    const mockDetect = vi.mocked(detectChallengeOnPage);
+
+    // Challenge never clears — poll should keep returning detected.
+    mockDetect.mockResolvedValue(fakeDetection);
+
+    let autoResumeCount = 0;
+
+    vi.useFakeTimers();
+    try {
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, pauseAndYieldExec);
+
+      queue.onEvent((ev) => {
+        if (ev.type === 'run-resumed') autoResumeCount++;
+      });
+
+      const { id } = queue.submit({
+        kind: 'agent',
+        url: 'https://captcha.test/',
+        goal: 'test',
+        assist: true,
+        assistSolveTimeoutMs: 30_000,
+      });
+
+      // Drain microtasks; hook suspends.
+      await vi.runAllTimersAsync();
+      // Fire the timeout.
+      await vi.advanceTimersByTimeAsync(30_001);
+      await vi.runAllTimersAsync();
+
+      // Now fire several poll ticks — they must NOT resume the already-timed-out run.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.runAllTimersAsync();
+
+      vi.useRealTimers();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const record = store.getRun(id)!;
+      expect(record.status).toBe('failed');
+      expect(record.failureReason).toBe(FAILURE_REASON_CAPTCHA_UNSOLVED);
+      // No auto-resume events must have fired after the timeout.
+      expect(autoResumeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      mockDetect.mockReset().mockResolvedValue(null);
+    }
   });
 });

@@ -232,6 +232,7 @@ const PREFIX_SCAN_LIMIT = 10_000;
 const RUN_STATUSES: readonly RunStatus[] = [
   'queued',
   'running',
+  'awaiting_human',
   'success',
   'failed',
   'max_steps',

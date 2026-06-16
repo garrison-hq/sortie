@@ -51,6 +51,7 @@ import { extract, navigateOrPdfSnapshot, jsonSchemaToZod } from '../extract/inde
 import { fetchPage } from '../fetch/index.js';
 import { runAgent } from '../agent/loop.js';
 import { bankAssistSolve } from '../profiles.js';
+import { detectChallengeOnPage } from '../challenge/detect.js';
 
 const DEFAULT_CONCURRENCY = 5;
 const MIN_CONCURRENCY = 1;
@@ -61,6 +62,8 @@ const SCREENSHOT_TIMEOUT_MS = 5000;
 const SCREENSHOT_JPEG_QUALITY = 55;
 /** Default solve window for paused CAPTCHA runs: 10 minutes. FR-014. */
 const DEFAULT_ASSIST_SOLVE_TIMEOUT_MS = 600_000;
+/** How often the auto-resume watcher re-detects on the paused page. FR-011. */
+const AUTO_RESUME_POLL_INTERVAL_MS = 1_500;
 /** Minimum and maximum allowed solve window (mirrors RunSpecSchema). */
 const MIN_ASSIST_SOLVE_TIMEOUT_MS = 30_000;
 const MAX_ASSIST_SOLVE_TIMEOUT_MS = 3_600_000;
@@ -220,6 +223,12 @@ interface PausedRun {
   assist: AssistState;
   /** NodeJS timer that fires on solve-window expiry. */
   deadlineTimer: NodeJS.Timeout;
+  /**
+   * FR-011 auto-resume watcher: polls the paused page every
+   * AUTO_RESUME_POLL_INTERVAL_MS to check whether the challenge cleared.
+   * Cleared on all terminal paths (resume/cancel/timeout/shutdown).
+   */
+  pollInterval: NodeJS.Timeout | null;
   /**
    * Resolving this promise wakes the suspended hook (and thus the agent
    * loop). Both the resume path AND the timeout path call this; the hook
@@ -467,12 +476,20 @@ export function createRunQueue(
         context,
         assist,
         deadlineTimer,
+        pollInterval: null,
         wakeResolve,
         terminated: false,
       };
       pausedRuns.set(item.id, paused);
 
       emit({ type: 'run-awaiting-human', runId: item.id, batchId: item.batchId, assist });
+
+      // FR-011: start auto-resume watcher — polls the paused page for challenge
+      // clearance. When cleared, auto-resumes via autoResumeRun() (no solver:
+      // C-001; only re-detects whether the human already cleared it).
+      paused.pollInterval = setInterval(() => {
+        autoResumeRun(item.id, paused);
+      }, AUTO_RESUME_POLL_INTERVAL_MS);
 
       // Free the worker slot so other runs proceed (FR-016).
       active--;
@@ -495,6 +512,99 @@ export function createRunQueue(
     };
   }
 
+  /** Stop the auto-resume poll interval for a paused run (idempotent). */
+  function stopPollInterval(paused: PausedRun): void {
+    if (paused.pollInterval !== null) {
+      clearInterval(paused.pollInterval);
+      paused.pollInterval = null;
+    }
+  }
+
+  /**
+   * FR-011 auto-resume watcher callback.
+   *
+   * Called by the poll interval on each tick for a paused run. Re-detects the
+   * challenge on the live page (C-001: never solves — only checks if the human
+   * already cleared it). When clear, triggers an automatic resume with
+   * solveSource:'auto'. Errors are swallowed so a transiently-closed page or
+   * a distill failure does not kill the run.
+   */
+  function autoResumeRun(runId: string, paused: PausedRun): void {
+    // Guard: don't poll if already resolved (race between interval and manual resume).
+    if (!pausedRuns.has(runId)) return;
+
+    const currentSnapshot = {
+      url: paused.page.url(),
+      title: '',
+      outline: '',
+      elements: [],
+      text: '',
+    };
+
+    // detectChallengeOnPage is async; swallow all errors so polling is safe.
+    detectChallengeOnPage(paused.page, currentSnapshot)
+      .then((detection) => {
+        // Re-check guard after the async call in case the run was resolved while detecting.
+        if (!pausedRuns.has(runId)) return;
+        if (detection?.detected) return; // still challenged — keep waiting
+
+        // Challenge cleared: auto-resume with solveSource:'auto'.
+        autoResumeResolved(runId);
+      })
+      .catch(() => {
+        // Swallow: closed page, navigation in flight, etc. — keep polling.
+      });
+  }
+
+  /**
+   * Complete an automatic resume (challenge cleared by the human, detected by
+   * the poll watcher). Mirrors the manual resume() path but uses solveSource:'auto'.
+   * Guards against races with manual resume, cancel, and timeout.
+   */
+  function autoResumeResolved(runId: string): void {
+    const paused = pausedRuns.get(runId);
+    if (!paused) return; // already resolved by another path
+
+    stopPollInterval(paused);
+    clearTimeout(paused.deadlineTimer);
+    pausedRuns.delete(runId);
+
+    store.updateRun(runId, { status: 'running' });
+
+    const profileName = paused.item.spec.profile;
+    const doBanking =
+      profileName === undefined
+        ? Promise.resolve()
+        : bankAssistSolve(paused.page, profileName, store);
+
+    doBanking
+      .catch(() => {
+        // Banking must not abort an auto-resume.
+      })
+      .finally(() => {
+        const resolvedAt = Date.now();
+        const assistFinal: AssistState = {
+          ...paused.assist,
+          resolvedAt,
+          resolution: 'solved',
+          solveSource: 'auto',
+        };
+        store.updateRun(runId, { assist: assistFinal });
+
+        emit({
+          type: 'run-resumed',
+          runId,
+          batchId: paused.item.batchId,
+          resolution: 'solved',
+          solveSource: 'auto',
+        });
+
+        // Re-account for the worker slot (mirrors manual resume()).
+        active++;
+        paused.wakeResolve();
+      });
+  }
+
   /**
    * Deadline timer callback (or shutdown): tear down the paused run with
    * `captcha_unsolved`. Sets `terminated = true` then resolves the hook's
@@ -504,6 +614,7 @@ export function createRunQueue(
     const paused = pausedRuns.get(runId);
     if (!paused) return;
     pausedRuns.delete(runId);
+    stopPollInterval(paused);
     clearTimeout(paused.deadlineTimer);
 
     const resolvedAt = Date.now();
@@ -697,6 +808,7 @@ export function createRunQueue(
       // Case 2: run is paused in awaiting_human — tear down the live context.
       const paused = pausedRuns.get(runId);
       if (paused) {
+        stopPollInterval(paused);
         clearTimeout(paused.deadlineTimer);
         pausedRuns.delete(runId);
 
@@ -735,7 +847,8 @@ export function createRunQueue(
       const paused = pausedRuns.get(runId);
       if (!paused) return false;
 
-      // Clear the deadline timer — we're resuming before expiry.
+      // Stop the auto-resume watcher and the deadline timer before proceeding.
+      stopPollInterval(paused);
       clearTimeout(paused.deadlineTimer);
       pausedRuns.delete(runId);
 
@@ -948,7 +1061,12 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
     credentials[name] = value;
   }
 
-  const page = await ctx.manager.newPage({ storageStatePath: session.storageStatePath });
+  // FR-003: enable fingerprint hygiene when assist is on (C-002: hygiene only).
+  // Assist-off: fingerprintHygiene omitted → behavior byte-identical to today.
+  const page = await ctx.manager.newPage({
+    storageStatePath: session.storageStatePath,
+    ...(spec.assist === true ? { fingerprintHygiene: true } : {}),
+  });
   // Track whether the agent loop paused for CAPTCHA — when true, the page
   // context must NOT be closed here (the queue keeps it alive until resume
   // or timeout). In all other cases the finally block closes it.
