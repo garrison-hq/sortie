@@ -17,6 +17,8 @@ subtasks:
 - T012
 - T013
 - T014
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "220206"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/agent/
@@ -113,3 +115,7 @@ Run `spec-kitty agent action implement WP03 --agent <name>` (after WP01).
 
 - Coupling the resume signal between loop and queue (WP04) — keep the interface small
   (a promise/callback) and documented; WP04 owns the queue side.
+
+## Activity Log
+
+- 2026-06-16T20:25:12Z – claude:sonnet:implementer:implementer – shell_pid=220206 – Started implementation via action command
