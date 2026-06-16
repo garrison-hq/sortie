@@ -129,3 +129,4 @@ Run `spec-kitty agent action implement WP07 --agent <name>` (after WP03–WP06).
 - 2026-06-16T22:23:55Z – claude:opus:reviewer:reviewer – shell_pid=412835 – Started review via action command
 - 2026-06-16T22:30:12Z – claude:opus:reviewer:reviewer – shell_pid=412835 – Moved to planned
 - 2026-06-16T22:31:00Z – claude:sonnet:implementer:implementer – shell_pid=425842 – Started implementation via action command
+- 2026-06-16T23:08:16Z – claude:sonnet:implementer:implementer – shell_pid=425842 – Fixed cycle-1: lazy provider acquisition; assist.spec runs green keyless (5/5 passed); deduped fixture; fixed liveview static-page screencast; restructured T035-liveview to resolve on first frame
