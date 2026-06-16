@@ -20,6 +20,8 @@ subtasks:
 - T024
 - T025
 - T026
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "303834"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/server/src/
@@ -135,3 +137,7 @@ mouse/key/resume/cancel`.
 
 - Bidirectional WS is new (was server→client only). Keep the inbound parser strict and the
   control surface tiny. Document the deployment auth caveat (R9) in code comments + quickstart.
+
+## Activity Log
+
+- 2026-06-16T21:22:26Z – claude:sonnet:implementer:implementer – shell_pid=303834 – Started implementation via action command
