@@ -19,6 +19,7 @@ import {
 import type {
   ProfileStateSummary,
   RunQueue,
+  RunRecord,
   RunSpec,
   RunStore,
   SearchEngineId,
@@ -36,6 +37,7 @@ import {
   validateRunSpec,
   validateSearchBody,
 } from './validate.js';
+import { stopSessionForRun } from './liveview.js';
 
 const MAX_BATCH_SPECS = 100;
 /** Run ids are UUIDs; anything outside this never touches the filesystem. */
@@ -132,7 +134,33 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   app.delete<IdParams>('/api/runs/:id', async (req, reply) => {
     const record = store.getRun(req.params.id);
     if (!record) return notFound(reply, 'Run not found.');
+    // For awaiting_human runs: tear down any live-view session first so the
+    // CDP screencast stops before the browser context is closed by cancel().
+    if (record.status === 'awaiting_human') {
+      await stopSessionForRun(record.id);
+    }
     return { cancelled: queue.cancel(record.id) };
+  });
+
+  // POST /api/runs/:id/resume — manually resume a paused run.
+  // 200: run back to running; 404: unknown run; 409: not awaiting_human.
+  // HTTP alternative to the `lv:resume` WS control message (http-endpoints.md).
+  // Auth note (R9): inherits local-first unauthenticated trust model.
+  app.post<IdParams>('/api/runs/:id/resume', async (req, reply) => {
+    const record = store.getRun(req.params.id);
+    if (!record) return notFound(reply, 'Run not found.');
+    if (record.status !== 'awaiting_human') {
+      return conflict(reply, `Run ${req.params.id} is not awaiting human assistance.`);
+    }
+    // Tear down any active live-view session before handing control back.
+    await stopSessionForRun(record.id);
+    const resumed = queue.resume(record.id);
+    if (!resumed) {
+      // Race: the run was just expired/cancelled between the store check and resume().
+      return conflict(reply, `Run ${req.params.id} is not awaiting human assistance.`);
+    }
+    const updated = store.getRun(record.id) as RunRecord;
+    return reply.code(200).send(updated);
   });
 
   app.get<IdParams>('/api/runs/:id/screenshots', async (req, reply) => {

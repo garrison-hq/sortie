@@ -7,11 +7,33 @@
 
 export type RunKind = 'extract' | 'agent' | 'fetch';
 
-export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'max_steps' | 'cancelled';
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'max_steps'
+  | 'cancelled'
+  | 'awaiting_human';
 
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+}
+
+/** Pause state attached to a run while it is `awaiting_human`. */
+export interface AssistState {
+  family: string;
+  signal: string;
+  stepIndex: number;
+  challengeUrl: string;
+  /** Epoch ms when the run was paused. */
+  pausedAt: number;
+  /** Epoch ms when the solve window expires. */
+  deadlineAt: number;
+  resolvedAt?: number;
+  resolution?: 'solved' | 'timeout' | 'cancelled';
+  solveSource?: 'auto' | 'manual';
 }
 
 /** Serializable description of a run — everything needed to (re)execute it. */
@@ -36,6 +58,8 @@ export interface RunSpec {
   queryName?: string;
   /** Markdown length cap (kind: fetch). */
   maxChars?: number;
+  /** Enable human-in-the-loop CAPTCHA assistance. Default false. FR-001. */
+  assist?: boolean;
 }
 
 /** A named, replayable run spec (v1: extract specs only). */
@@ -97,6 +121,8 @@ export interface RunRecord {
   failureReason?: string;
   usage?: TokenUsage;
   finalUrl?: string;
+  /** Present when the run is (or was) paused for CAPTCHA assistance. */
+  assist?: AssistState;
 }
 
 export interface AgentAction {
@@ -123,16 +149,68 @@ export type RunEventType =
   | 'run-started'
   | 'run-step'
   | 'run-screenshot'
-  | 'run-finished';
+  | 'run-finished'
+  | 'run-awaiting-human'
+  | 'run-resumed';
 
-export interface RunEvent {
-  type: RunEventType;
-  runId: string;
-  batchId?: string;
-  /** Present on run-step. */
-  step?: StepRecord;
-  /** Present on run-queued/run-started/run-finished. */
-  record?: RunRecord;
-  /** Present on run-screenshot. */
-  screenshot?: { stepIndex: number; path: string };
+export type RunEvent =
+  | {
+      type: 'run-queued' | 'run-started' | 'run-finished' | 'run-step' | 'run-screenshot';
+      runId: string;
+      batchId?: string;
+      /** Present on run-step. */
+      step?: StepRecord;
+      /** Present on run-queued/run-started/run-finished. */
+      record?: RunRecord;
+      /** Present on run-screenshot. */
+      screenshot?: { stepIndex: number; path: string };
+    }
+  | {
+      type: 'run-awaiting-human';
+      runId: string;
+      batchId?: string;
+      assist: AssistState;
+    }
+  | {
+      type: 'run-resumed';
+      runId: string;
+      batchId?: string;
+      resolution: 'solved' | 'cancelled';
+      solveSource?: 'auto' | 'manual';
+    };
+
+/** Live-view message frame metadata (R4 coordinate mapping). */
+export interface LvFrameMetadata {
+  offsetTop: number;
+  pageScaleFactor: number;
+  deviceWidth: number;
+  deviceHeight: number;
 }
+
+/** Client→server live-view message union. */
+export type LvClientMessage =
+  | { t: 'lv:attach'; runId: string }
+  | { t: 'lv:detach'; runId: string }
+  | {
+      t: 'lv:mouse';
+      runId: string;
+      event: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel';
+      x: number;
+      y: number;
+      button?: 'left' | 'right' | 'middle' | 'none';
+      buttons?: number;
+      clickCount?: number;
+      deltaX?: number;
+      deltaY?: number;
+    }
+  | {
+      t: 'lv:key';
+      runId: string;
+      event: 'keyDown' | 'keyUp' | 'char';
+      key?: string;
+      code?: string;
+      text?: string;
+      modifiers?: number;
+    }
+  | { t: 'lv:resume'; runId: string }
+  | { t: 'lv:cancel'; runId: string };

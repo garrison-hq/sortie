@@ -94,6 +94,17 @@ Agent options:
                           (cookies + localStorage) as login profile <name>
   --out <file>            Write the agent's output data (JSON) to this file
   --trace <file>          Write the full run trace (all steps) as JSON to this file
+  --assist                Enable human-in-the-loop CAPTCHA assistance. When a challenge
+                          is detected the run pauses at "awaiting_human" so a human can
+                          solve it via the live-view UI, then the agent resumes.
+                          NOTE: requires a live-view-capable server (apps/server).
+                          The CLI runs the engine in-process without a UI/WebSocket;
+                          if no server is reachable this flag logs a warning and the
+                          run falls back to graceful-fail-on-challenge behavior instead.
+  --assist-timeout <ms>   How long (milliseconds) to wait for a human to solve a
+                          detected challenge before failing the run with
+                          "captcha_unsolved". Must be between 30000..3600000.
+                          Only meaningful when --assist is set.
 
 Search options:
   --max-results <n>       Number of results (default 10, capped at 20)
@@ -153,6 +164,12 @@ Batch options:
   --concurrency <n>       Parallel browser workers (default 5, clamped 1..10)
   --export <file>         After the batch drains, export run outputs for the
                           batch to this file; format from extension (.json|.csv)
+  --assist                Enable human-in-the-loop CAPTCHA assistance for all specs
+                          in the batch. Same caveats as the agent --assist flag:
+                          requires a live-view-capable server. Without one, the
+                          flag logs a warning and falls back to graceful-fail behavior.
+  --assist-timeout <ms>   Per-run solve timeout (ms) for batch assist runs.
+                          Must be between 30000..3600000.
 
 Runs subcommands:
   runs list               Table of persisted runs (newest first) on stdout
@@ -256,6 +273,8 @@ interface CliValues {
   url?: string;
   profile?: string;
   'save-profile'?: string;
+  assist?: boolean;
+  'assist-timeout'?: string;
 }
 
 function usageError(message: string): never {
@@ -416,6 +435,35 @@ function parseMaxStepsFlag(values: CliValues): number | undefined {
 }
 
 /**
+ * Validate --assist-timeout; must be an integer in [30000, 3600000].
+ * Returns undefined when the flag was not given.
+ */
+function parseAssistTimeout(values: CliValues): number | undefined {
+  if (values['assist-timeout'] === undefined) return undefined;
+  const ms = Number(values['assist-timeout']);
+  if (!Number.isInteger(ms) || ms < 30_000 || ms > 3_600_000) {
+    usageError(
+      `--assist-timeout must be an integer between 30000 and 3600000 (got "${values['assist-timeout']}").`,
+    );
+  }
+  return ms;
+}
+
+/**
+ * When --assist is on but the CLI runs the engine in-process (no live-view
+ * server/WebSocket), challenge solving is unavailable. Emits a warning so the
+ * operator knows the flag has no effect in this context.
+ */
+function warnAssistUnavailableInCli(): void {
+  process.stderr.write(
+    'Warning: --assist is set but the CLI runs the engine in-process without a ' +
+      'live-view-capable server. Human CAPTCHA solving is unavailable. ' +
+      'The run will fail gracefully if a challenge is detected ' +
+      '(same as running without --assist).\n',
+  );
+}
+
+/**
  * Resolve credential values from the environment. Values are passed to the
  * agent executor only — they are never printed, logged, or sent to the model.
  */
@@ -499,6 +547,12 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
   }
 
   const maxSteps = parseMaxStepsFlag(values);
+  // The CLI runs in-process without a live-view server, so human challenge
+  // solving is unavailable. Warn when --assist is set; assistEnabled is always
+  // false here so the run falls back to graceful-fail-on-challenge behavior.
+  if (values.assist) warnAssistUnavailableInCli();
+  const assistEnabled = false;
+  parseAssistTimeout(values); // validate the value even if assist is disabled
 
   loadDotEnv();
 
@@ -514,8 +568,8 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
 
   process.stderr.write(`Running agent at ${startUrl} ...\n`);
 
-  let exitCode = 0;
   let manager: BrowserManager | undefined;
+  let exitCode: number;
   try {
     let page: Page | undefined;
     if (saveProfile !== undefined) {
@@ -536,28 +590,13 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
       headless: !values.headful,
       storageStatePath,
       credentials,
+      assistEnabled,
       onStep: (step: StepRecord) => {
         process.stderr.write(formatStepLine(step));
       },
     });
 
-    if (values.trace) {
-      const tracePath = resolve(values.trace);
-      writeFileSync(tracePath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-      process.stderr.write(`Wrote trace to ${tracePath}\n`);
-    }
-
-    if (result.status !== 'success') {
-      exitCode = reportAgentFailure(result, saveProfile);
-    }
-
-    if (exitCode === 0 && saveProfile !== undefined && page) {
-      await saveAgentProfile(saveProfile, page, result, values);
-    }
-
-    if (exitCode === 0) {
-      reportAgentSuccess(result, values);
-    }
+    exitCode = await handleAgentResult(result, page, saveProfile, values);
   } finally {
     if (manager) {
       await manager.close();
@@ -567,6 +606,34 @@ async function runAgentCommand(startUrl: string, values: CliValues): Promise<voi
   if (exitCode !== 0) {
     process.exit(exitCode);
   }
+}
+
+/**
+ * Handle the result of an agent run: write traces, persist profiles on success,
+ * and report the outcome. Returns the process exit code (0 = success).
+ */
+async function handleAgentResult(
+  result: AgentResult,
+  page: Page | undefined,
+  saveProfile: string | undefined,
+  values: CliValues,
+): Promise<number> {
+  if (values.trace) {
+    const tracePath = resolve(values.trace);
+    writeFileSync(tracePath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    process.stderr.write(`Wrote trace to ${tracePath}\n`);
+  }
+
+  if (result.status !== 'success') {
+    return reportAgentFailure(result, saveProfile);
+  }
+
+  if (saveProfile !== undefined && page) {
+    await saveAgentProfile(saveProfile, page, result, values);
+  }
+
+  reportAgentSuccess(result, values);
+  return 0;
 }
 
 /**
@@ -925,6 +992,10 @@ function formatRunEvent(ev: RunEvent): string {
           : '?';
       return `[${id}] finished ${record?.status ?? 'unknown'} (${seconds}s)\n`;
     }
+    case 'run-awaiting-human':
+      return `[${id}] awaiting human (${ev.assist.family})\n`;
+    case 'run-resumed':
+      return `[${id}] resumed (${ev.resolution})\n`;
   }
 }
 
@@ -943,6 +1014,25 @@ async function runBatchCommand(specsFile: string, values: CliValues): Promise<vo
   const exportFormat = exportPath ? exportFormatFromPath(exportPath, '--export') : undefined;
   const provider = buildProviderOverride(values);
 
+  // The CLI runs in-process without a live-view server, so human challenge
+  // solving is unavailable. Warn when --assist is set; assistEnabled is always
+  // false here so runs fall back to graceful-fail-on-challenge behavior.
+  if (values.assist) warnAssistUnavailableInCli();
+  const assistTimeout = parseAssistTimeout(values);
+
+  // Stamp assist-related fields onto every spec when the flags are present.
+  // assistEnabled is always false for the CLI (no live-view server), but the
+  // spec field is set so callers relying on spec.assist see the intent.
+  const patchedSpecs = specs.map((spec) => ({
+    ...spec,
+    // assist is always false for the CLI (no live-view server); the field is
+    // stamped so the intent is visible in stored run records.
+    ...(values.assist ? { assist: false } : {}),
+    ...(values.assist && assistTimeout !== undefined
+      ? { assistSolveTimeoutMs: assistTimeout }
+      : {}),
+  }));
+
   const store = openRunStore(values);
   const queue = createRunQueue(store, { concurrency, provider });
   let exitCode: number | undefined;
@@ -951,7 +1041,7 @@ async function runBatchCommand(specsFile: string, values: CliValues): Promise<vo
       process.stderr.write(formatRunEvent(ev));
     });
 
-    const { batchId, runs } = queue.submitBatch(specs);
+    const { batchId, runs } = queue.submitBatch(patchedSpecs);
     process.stderr.write(`Submitted ${runs.length} run(s) as batch ${batchId}.\n`);
 
     await queue.drain();
@@ -1543,6 +1633,8 @@ function parseCliArgs(): { values: CliValues; positionals: string[] } {
         url: { type: 'string' },
         profile: { type: 'string' },
         'save-profile': { type: 'string' },
+        assist: { type: 'boolean', default: false },
+        'assist-timeout': { type: 'string' },
       },
     }) as { values: CliValues; positionals: string[] };
   } catch (err) {

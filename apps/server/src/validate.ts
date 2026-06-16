@@ -89,6 +89,18 @@ function validateRunSpecOptionals(value: Record<string, unknown>, errors: string
   if (value['maxChars'] !== undefined && !isPositiveInteger(value['maxChars'])) {
     errors.push('maxChars must be a positive integer when present');
   }
+  if (value['assist'] !== undefined && typeof value['assist'] !== 'boolean') {
+    errors.push('assist must be a boolean when present');
+  }
+  validateAssistTimeout(value['assistSolveTimeoutMs'], errors);
+}
+
+/** Validate the optional assistSolveTimeoutMs field (30000–3600000). */
+function validateAssistTimeout(ms: unknown, errors: string[]): void {
+  if (ms === undefined) return;
+  if (typeof ms !== 'number' || !Number.isInteger(ms) || ms < 30_000 || ms > 3_600_000) {
+    errors.push('assistSolveTimeoutMs must be an integer between 30000 and 3600000 when present');
+  }
 }
 
 /** True when `value` is an array of non-empty strings. */
@@ -144,6 +156,9 @@ export function toRunSpec(raw: Record<string, unknown>): RunSpec {
   if (typeof raw['profile'] === 'string') spec.profile = raw['profile'];
   if (typeof raw['queryName'] === 'string') spec.queryName = raw['queryName'];
   if (typeof raw['maxChars'] === 'number') spec.maxChars = raw['maxChars'];
+  if (typeof raw['assist'] === 'boolean') spec.assist = raw['assist'];
+  if (typeof raw['assistSolveTimeoutMs'] === 'number')
+    spec.assistSolveTimeoutMs = raw['assistSolveTimeoutMs'];
   return spec;
 }
 

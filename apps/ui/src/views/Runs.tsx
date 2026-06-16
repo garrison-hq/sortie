@@ -44,6 +44,7 @@ export function Runs() {
   // Live updates: any record-bearing event (run-queued/started/finished)
   // upserts the row immediately, between polls.
   useRunEvents((ev) => {
+    if (ev.type !== 'run-queued' && ev.type !== 'run-started' && ev.type !== 'run-finished') return;
     const record = ev.record;
     if (!record) return;
     setRuns((prev) => {

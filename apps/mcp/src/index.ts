@@ -164,7 +164,7 @@ const TOOLS = [
   {
     name: 'run_agent',
     description:
-      'Drive a real headless browser through a multi-step web task described in natural language: navigate, click, type, paginate, log in, and finally return structured, schema-validated results. Use this when a single extraction is not enough (e.g. "log in and fetch the order history", "page through all results and collect every item"). CAPTCHAs and anti-bot walls are not bypassed — the run fails gracefully with a clear reason. Requires an LLM provider key on the server.',
+      'Drive a real headless browser through a multi-step web task described in natural language: navigate, click, type, paginate, log in, and finally return structured, schema-validated results. Use this when a single extraction is not enough (e.g. "log in and fetch the order history", "page through all results and collect every item"). CAPTCHAs and anti-bot walls are not bypassed — the run fails gracefully with a clear reason. Requires an LLM provider key on the server.\n\nNOTE on `assist`: MCP runs over stdio — it is non-interactive and cannot stream a live browser view to a human. Setting assist=true is accepted but has no effect: if a CAPTCHA challenge is detected the run still fails gracefully with a clear reason naming the challenge family and the profile (if any) that may need to be refreshed. There is no hang or indefinite wait.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -193,6 +193,11 @@ const TOOLS = [
           type: 'string',
           description:
             'Optional named login profile (created via `sortie profile login`) whose saved session cookies are loaded before the agent starts, so it begins already signed in.',
+        },
+        assist: {
+          type: 'boolean',
+          description:
+            'Request human-in-the-loop CAPTCHA assistance. Default false. NOTE: MCP/stdio is non-interactive — this flag is accepted but ignored. If a CAPTCHA challenge is detected the run fails gracefully with a clear reason (challenge family + profile hint) rather than hanging.',
         },
       },
       required: ['goal', 'startUrl'],
@@ -363,32 +368,67 @@ function resolveAgentCredentials(
   return { credentials: resolved };
 }
 
-async function handleRunAgent(args: unknown): Promise<ToolResult> {
-  const { goal, startUrl, schema, maxSteps, credentials, profile } = (args ?? {}) as {
-    goal?: unknown;
-    startUrl?: unknown;
-    schema?: unknown;
-    maxSteps?: unknown;
-    credentials?: unknown;
-    profile?: unknown;
-  };
-  if (typeof goal !== 'string' || goal.trim().length === 0) {
+interface RunAgentArgs {
+  goal?: unknown;
+  startUrl?: unknown;
+  schema?: unknown;
+  maxSteps?: unknown;
+  credentials?: unknown;
+  profile?: unknown;
+  assist?: unknown;
+}
+
+/** Validate scalar run_agent arguments; returns an error result or null. */
+function validateRunAgentArgs(a: RunAgentArgs): ToolResult | null {
+  if (typeof a.goal !== 'string' || a.goal.trim().length === 0) {
     return errorResult(new Error('run_agent: "goal" must be a non-empty string'));
   }
-  if (!isAbsoluteHttpUrl(startUrl)) {
+  if (!isAbsoluteHttpUrl(a.startUrl)) {
     return errorResult(new Error('run_agent: "startUrl" must be an absolute http(s) URL'));
   }
-  if (schema !== undefined && !isSchemaObject(schema)) {
+  if (a.schema !== undefined && !isSchemaObject(a.schema)) {
     return errorResult(new Error('run_agent: "schema" must be a JSON Schema object'));
   }
-  if (maxSteps !== undefined && !isPositiveInteger(maxSteps)) {
+  if (a.maxSteps !== undefined && !isPositiveInteger(a.maxSteps)) {
     return errorResult(new Error('run_agent: "maxSteps" must be a positive integer'));
   }
-  if (credentials !== undefined && !isSchemaObject(credentials)) {
+  if (a.credentials !== undefined && !isSchemaObject(a.credentials)) {
     return errorResult(
       new Error('run_agent: "credentials" must be an object of name -> value strings'),
     );
   }
+  if (a.assist !== undefined && typeof a.assist !== 'boolean') {
+    return errorResult(new Error('run_agent: "assist" must be a boolean'));
+  }
+  return null;
+}
+
+/**
+ * Emit a stderr warning when assist=true is passed in MCP/stdio context.
+ * MCP is non-interactive — no live-view canvas can be shown to a human.
+ * The run proceeds with assist disabled; a detected challenge fails gracefully.
+ */
+function warnAssistUnavailableInMcp(profile: unknown): void {
+  const profileHint =
+    typeof profile === 'string' ? ` (profile "${profile}" may need to be refreshed)` : '';
+  console.error(
+    `[run_agent] assist=true is not supported over MCP/stdio (non-interactive context). ` +
+      `Challenge solving is unavailable. If a CAPTCHA is detected the run will fail ` +
+      `gracefully with a clear reason naming the challenge family${profileHint}.`,
+  );
+}
+
+async function handleRunAgent(args: unknown): Promise<ToolResult> {
+  const a = (args ?? {}) as RunAgentArgs;
+  const { goal, startUrl, schema, maxSteps, credentials, profile, assist } = a;
+
+  const validationError = validateRunAgentArgs(a);
+  if (validationError) return validationError;
+
+  // MCP/stdio is non-interactive: a live-view browser canvas cannot be shown to
+  // a human. If assist=true is requested, warn and run without it so a challenge
+  // fails gracefully with a clear reason rather than hanging indefinitely.
+  if (assist === true) warnAssistUnavailableInMcp(profile);
 
   // Resolve credentials. "env:VARNAME" values are read from the server's
   // environment at call time. Resolved values are passed straight to the
@@ -397,14 +437,18 @@ async function handleRunAgent(args: unknown): Promise<ToolResult> {
   if ('error' in resolved) return resolved.error;
 
   const storageStatePath = resolveProfileArg('run_agent', profile);
-  const zodSchema = schema === undefined ? undefined : jsonSchemaToZod(schema);
+  const zodSchema =
+    schema === undefined ? undefined : jsonSchemaToZod(schema as Record<string, unknown>);
+  // assistEnabled is always false in the MCP context (non-interactive stdio).
+  // The assist flag is accepted to avoid breaking callers but has no effect.
   const result = await runAgent({
-    goal,
-    startUrl,
+    goal: goal as string,
+    startUrl: startUrl as string,
     schema: zodSchema,
     maxSteps: maxSteps as number | undefined,
     credentials: resolved.credentials,
     storageStatePath,
+    assistEnabled: false,
   });
 
   // Deliberately compact: step records contain page text and would bloat

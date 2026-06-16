@@ -10,6 +10,17 @@
  * - `executeRun` is injectable so unit tests can drive the queue without
  *   browsers or LLM calls; the default executor dispatches on RunSpec.kind.
  *
+ * WP04 — Non-blocking pause/resume/timeout + cookie banking:
+ * When an agent run yields `awaiting_human` the worker slot is immediately
+ * freed (`active` is decremented and `pump()` is called) so other runs keep
+ * processing (FR-016). The live browser context is kept alive in `pausedRuns`
+ * until the human resumes or the solve window expires. `resume(runId)` banks
+ * cookies into the profile (if any) and signals the loop to continue on the
+ * same page. A per-run deadline timer enforces `assistSolveTimeoutMs` and
+ * produces `failed` + `captcha_unsolved` on expiry. A cap on concurrent
+ * paused runs (`maxConcurrentAwaitingHuman`, default 3) degrades additional
+ * challenged runs to a graceful fail instead of an unbounded pause queue.
+ *
  * Security invariant: credential VALUES are resolved from process.env at
  * execution time and handed straight to the agent loop — only env var NAMES
  * ever appear in records, events, or failure reasons.
@@ -18,8 +29,10 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import type {
+  AssistState,
+  ChallengeDetection,
   LlmProvider,
   QueueOptions,
   RunEvent,
@@ -31,11 +44,13 @@ import type {
   StepRecord,
   TokenUsage,
 } from '../contracts.js';
+import { FAILURE_REASON_CAPTCHA_UNSOLVED } from '../contracts.js';
 import { createProvider } from '../llm/index.js';
 import { BrowserManager } from '../browser/index.js';
 import { extract, navigateOrPdfSnapshot, jsonSchemaToZod } from '../extract/index.js';
 import { fetchPage } from '../fetch/index.js';
 import { runAgent } from '../agent/loop.js';
+import { bankAssistSolve } from '../profiles.js';
 
 const DEFAULT_CONCURRENCY = 5;
 const MIN_CONCURRENCY = 1;
@@ -44,6 +59,13 @@ const DEFAULT_PER_DOMAIN_INTERVAL_MS = 1000;
 const DEFAULT_MAX_RETRIES = 2;
 const SCREENSHOT_TIMEOUT_MS = 5000;
 const SCREENSHOT_JPEG_QUALITY = 55;
+/** Default solve window for paused CAPTCHA runs: 10 minutes. FR-014. */
+const DEFAULT_ASSIST_SOLVE_TIMEOUT_MS = 600_000;
+/** Minimum and maximum allowed solve window (mirrors RunSpecSchema). */
+const MIN_ASSIST_SOLVE_TIMEOUT_MS = 30_000;
+const MAX_ASSIST_SOLVE_TIMEOUT_MS = 3_600_000;
+/** Default cap on simultaneously-paused runs. FR-016. */
+const DEFAULT_MAX_CONCURRENT_AWAITING_HUMAN = 3;
 /** Markdown cap for queued fetch runs — tighter than fetchPage's 80k default
  * because outputs are persisted in SQLite (store bloat guard). */
 const QUEUED_FETCH_MAX_CHARS = 40_000;
@@ -59,6 +81,15 @@ export interface ExecuteRunOutcome {
   failureReason?: string;
   usage?: TokenUsage;
   finalUrl?: string;
+  /** Present when the run paused for CAPTCHA assistance. */
+  assist?: AssistState;
+  /**
+   * When status is `awaiting_human`, the queue must NOT close the browser
+   * context — it is kept alive so the human can interact with the page.
+   * The executor sets this to the live page so the queue can reach the
+   * context for cookie banking and teardown on timeout/cancel.
+   */
+  livePage?: Page;
 }
 
 /**
@@ -87,6 +118,26 @@ export type ExecuteRunFn = (
      * 'failed' outcome, not an infrastructure error.
      */
     resolveProfile: (name: string) => string | undefined;
+    /**
+     * Called by the executor when the agent loop detects a CAPTCHA with
+     * assist enabled. The executor passes the live `page` so the queue can
+     * keep the context alive. The queue wires this to suspend the run
+     * non-blocking; the returned promise resolves when the queue is ready for
+     * the loop to continue (on resume or when the cap is exceeded).
+     */
+    onAwaitingHuman?: (
+      page: Page,
+      detection: ChallengeDetection,
+      stepIndex: number,
+    ) => Promise<void>;
+    /**
+     * The provider that was injected into the queue at construction time, or
+     * `undefined` when none was injected (server / assist path). Already
+     * constructed — forwarding it to `runAgent` does NOT trigger any key
+     * validation. When undefined, `runAgent` lazily constructs its own provider
+     * on the first `chat()` call (after CAPTCHA detection can pause the run).
+     */
+    injectedProvider?: LlmProvider;
   },
 ) => Promise<ExecuteRunOutcome>;
 
@@ -159,6 +210,31 @@ interface QueueItem {
 }
 
 /**
+ * Live state for a run paused in `awaiting_human`.
+ * The browser context is kept alive; worker slot is freed.
+ */
+interface PausedRun {
+  item: QueueItem;
+  page: Page;
+  context: BrowserContext;
+  assist: AssistState;
+  /** NodeJS timer that fires on solve-window expiry. */
+  deadlineTimer: NodeJS.Timeout;
+  /**
+   * Resolving this promise wakes the suspended hook (and thus the agent
+   * loop). Both the resume path AND the timeout path call this; the hook
+   * reads `terminated` to know which path won.
+   */
+  wakeResolve: () => void;
+  /**
+   * Set to true by `expirePausedRun` before calling `wakeResolve`. When
+   * true, the hook returns without further action (finishRun was already
+   * called by the expiry path).
+   */
+  terminated: boolean;
+}
+
+/**
  * Create a RunQueue executing specs against `store` with a shared browser.
  * Pass `executeRun` to replace the real extract/agent execution (tests).
  */
@@ -176,6 +252,8 @@ export function createRunQueue(
   const maxRetries = opts?.maxRetries ?? DEFAULT_MAX_RETRIES;
   const screenshotsEnabled = opts?.screenshots?.enabled ?? true;
   const screenshotsDir = opts?.screenshots?.dir ?? defaultScreenshotDir();
+  const maxConcurrentAwaitingHuman =
+    opts?.maxConcurrentAwaitingHuman ?? DEFAULT_MAX_CONCURRENT_AWAITING_HUMAN;
   const exec = executeRun ?? defaultExecuteRun;
 
   const manager = new BrowserManager();
@@ -207,6 +285,12 @@ export function createRunQueue(
   const listeners = new Set<(ev: RunEvent) => void>();
   /** Epoch ms of the last run START per hostname (rate-limit windows). */
   const lastStartByHost = new Map<string, number>();
+
+  /**
+   * Runs currently paused awaiting human CAPTCHA assistance.
+   * Worker slot is NOT counted in `active` for paused runs.
+   */
+  const pausedRuns = new Map<string, PausedRun>();
 
   let active = 0;
   let shuttingDown = false;
@@ -292,7 +376,9 @@ export function createRunQueue(
   }
 
   function settleWaiters(): void {
-    if (active > 0) return;
+    // Drain waiters only once all active runs AND all paused runs are done.
+    const totalBusy = active + pausedRuns.size;
+    if (totalBusy > 0) return;
     while (idleWaiters.length > 0) {
       idleWaiters.pop()!();
     }
@@ -301,6 +387,159 @@ export function createRunQueue(
         drainWaiters.pop()!();
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pause/resume helpers (T015, T016, T017)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build an `onAwaitingHuman` hook (attached to ExecuteRunCtx) that the
+   * executor calls when the agent loop detects a challenge. The executor
+   * supplies the live `page` directly so the queue can keep the context alive.
+   *
+   * Returns a function that:
+   * - When cap is not exceeded: pauses the run (frees the worker slot),
+   *   arms the deadline timer, and suspends until resume or timeout.
+   * - When cap is exceeded: resolves immediately with a side-effect that
+   *   marks a pending "cap exceeded" state so `runItem` can fail gracefully.
+   */
+  function buildOnAwaitingHuman(item: QueueItem): {
+    hook: (page: Page, detection: ChallengeDetection, stepIndex: number) => Promise<void>;
+    wasCapExceeded: () => boolean;
+    wasTerminated: () => boolean;
+  } {
+    let capExceeded = false;
+    // Set to true when the deadline fires (or shutdown) so runItem knows
+    // the run was already finalized and must not call finishRun again.
+    let hookTerminated = false;
+
+    async function hook(
+      page: Page,
+      detection: ChallengeDetection,
+      stepIndex: number,
+    ): Promise<void> {
+      // Cap check: if too many runs are already paused, degrade gracefully.
+      if (pausedRuns.size >= maxConcurrentAwaitingHuman) {
+        capExceeded = true;
+        // Resolve immediately — runItem will detect capExceeded and fail.
+        return;
+      }
+
+      const context = page.context();
+
+      const solveTimeoutMs = clamp(
+        item.spec.assistSolveTimeoutMs ?? DEFAULT_ASSIST_SOLVE_TIMEOUT_MS,
+        MIN_ASSIST_SOLVE_TIMEOUT_MS,
+        MAX_ASSIST_SOLVE_TIMEOUT_MS,
+      );
+      const pausedAt = Date.now();
+      const deadlineAt = pausedAt + solveTimeoutMs;
+
+      const assist: AssistState = {
+        family: detection.family,
+        signal: detection.signal,
+        stepIndex,
+        challengeUrl: page.url(),
+        pausedAt,
+        deadlineAt,
+      };
+
+      // Build the wake signal: a promise the hook awaits until either
+      // resume() or expirePausedRun() resolves it. The `terminated` flag
+      // on `PausedRun` distinguishes the two paths.
+      let wakeResolve!: () => void;
+      const wakeSignal = new Promise<void>((resolve) => {
+        wakeResolve = resolve;
+      });
+
+      // Persist the awaiting_human transition + assist snapshot (T019).
+      store.updateRun(item.id, { status: 'awaiting_human', assist });
+
+      // Arm the deadline timer (T017).
+      const deadlineTimer = setTimeout(() => {
+        expirePausedRun(item.id);
+      }, solveTimeoutMs);
+
+      const paused: PausedRun = {
+        item,
+        page,
+        context,
+        assist,
+        deadlineTimer,
+        wakeResolve,
+        terminated: false,
+      };
+      pausedRuns.set(item.id, paused);
+
+      emit({ type: 'run-awaiting-human', runId: item.id, batchId: item.batchId, assist });
+
+      // Free the worker slot so other runs proceed (FR-016).
+      active--;
+      settleWaiters();
+      pump();
+
+      // Suspend until resume() or timeout wakes us.
+      await wakeSignal;
+
+      // Propagate the terminated flag so runItem can skip finishRun.
+      if (paused.terminated) {
+        hookTerminated = true;
+      }
+    }
+
+    return {
+      hook,
+      wasCapExceeded: () => capExceeded,
+      wasTerminated: () => hookTerminated,
+    };
+  }
+
+  /**
+   * Deadline timer callback (or shutdown): tear down the paused run with
+   * `captcha_unsolved`. Sets `terminated = true` then resolves the hook's
+   * wake signal so the suspended coroutine can unblock and exit cleanly.
+   */
+  function expirePausedRun(runId: string): void {
+    const paused = pausedRuns.get(runId);
+    if (!paused) return;
+    pausedRuns.delete(runId);
+    clearTimeout(paused.deadlineTimer);
+
+    const resolvedAt = Date.now();
+    const assistFinal: AssistState = {
+      ...paused.assist,
+      resolvedAt,
+      resolution: 'timeout',
+    };
+
+    // Close the browser context — no more use for it.
+    paused.context.close().catch(() => {});
+
+    const record = store.updateRun(runId, {
+      status: 'failed',
+      failureReason: FAILURE_REASON_CAPTCHA_UNSOLVED,
+      finishedAt: resolvedAt,
+      assist: assistFinal,
+    });
+    emit({ type: 'run-finished', runId, batchId: paused.item.batchId, record });
+
+    // Wake the suspended hook so the coroutine can exit. The `terminated`
+    // flag tells runItem not to call finishRun a second time.
+    paused.terminated = true;
+
+    // Mirror resume()'s slot re-accounting: the hook freed the slot with
+    // active-- when pausing; pump's .finally will decrement active again when
+    // the suspended runItem settles. We must add back the slot now so the net
+    // effect is zero (one active++ matched by one active-- in .finally).
+    active++;
+
+    paused.wakeResolve();
+
+    // The worker slot was freed when we paused; settleWaiters checks both
+    // active and pausedRuns, so now that pausedRuns shrank we re-evaluate.
+    settleWaiters();
+    pump();
   }
 
   /** One execution attempt; settles the run or requeues on infra errors. */
@@ -319,6 +558,8 @@ export function createRunQueue(
       ? createScreenshotSink({ runId: item.id, batchId: item.batchId, dir: screenshotsDir, emit })
       : noopScreenshotSink;
 
+    const { hook: onAwaitingHuman, wasCapExceeded, wasTerminated } = buildOnAwaitingHuman(item);
+
     try {
       const started = store.updateRun(item.id, {
         status: 'running',
@@ -330,22 +571,63 @@ export function createRunQueue(
       // `provider` is a lazy getter: it is only created (from opts/env) when
       // the executor actually uses it, so injected test executors never
       // require provider configuration.
+      // `injectedProvider` carries the raw opts.provider value (already
+      // constructed, never undefined-or-lazy) so executeAgent can forward it
+      // to runAgent without going through the forcing getter.
       const ctx: ExecuteRunCtx = {
         manager,
         onStep,
         screenshots,
         resolveProfile,
+        onAwaitingHuman: item.spec.assist ? onAwaitingHuman : undefined,
+        injectedProvider: opts?.provider,
         get provider(): LlmProvider {
           return getProvider();
         },
       };
       const outcome = await exec(item.spec, ctx);
-      // In-flight captures must land before 'run-finished' so the final
-      // screenshot exists when consumers react to completion.
+
+      // Cap-exceeded path: the hook resolved immediately (no pause) but
+      // set the cap-exceeded flag. The executor may have left the context
+      // open (livePage). Close it and fail gracefully.
+      if (wasCapExceeded()) {
+        await screenshots.flush();
+        if (outcome.livePage) {
+          await outcome.livePage
+            .context()
+            .close()
+            .catch(() => {});
+        }
+        finishRun(item, {
+          status: 'failed',
+          failureReason:
+            `Run paused for CAPTCHA but the concurrent-pause cap ` +
+            `(${maxConcurrentAwaitingHuman}) was already reached — ` +
+            'try again when a slot is free.',
+        });
+        return;
+      }
+
+      if (outcome.status === 'awaiting_human') {
+        // The run is paused in `pausedRuns` — the hook already:
+        //   - moved the run into pausedRuns
+        //   - freed the worker slot (active--)
+        //   - called pump() so other runs proceeded
+        // We must NOT call finishRun here; the resume or timeout path does.
+        // Screenshots were flushed inside the hook before yielding.
+        return;
+      }
+
+      // Normal terminal outcome (success, failed, max_steps, cancelled).
       await screenshots.flush();
       finishRun(item, outcome);
     } catch (err) {
       await screenshots.flush();
+      // Belt-and-suspenders: if the queue's timeout/shutdown path already
+      // finalized this run (terminated = true) we must not re-queue or
+      // double-finish it, even if an error somehow escaped the guarded
+      // re-detect path in the loop (e.g. a race on a closed page).
+      if (wasTerminated()) return;
       const message = err instanceof Error ? err.message : String(err);
       if (item.attempts <= maxRetries && !shuttingDown) {
         // Infrastructure error with retry budget left: back to the queue tail.
@@ -366,6 +648,7 @@ export function createRunQueue(
     if (outcome.failureReason !== undefined) patch.failureReason = outcome.failureReason;
     if (outcome.usage !== undefined) patch.usage = outcome.usage;
     if (outcome.finalUrl !== undefined) patch.finalUrl = outcome.finalUrl;
+    if (outcome.assist !== undefined) patch.assist = outcome.assist;
 
     const record = store.updateRun(item.id, patch);
     emit({ type: 'run-finished', runId: item.id, batchId: item.batchId, record });
@@ -401,13 +684,112 @@ export function createRunQueue(
     },
 
     cancel(runId: string): boolean {
+      // Case 1: run is still waiting in the queue (not yet started).
       const index = queue.findIndex((item) => item.id === runId);
-      if (index === -1) return false;
-      const [item] = queue.splice(index, 1);
-      const record = store.updateRun(runId, { status: 'cancelled', finishedAt: Date.now() });
-      emit({ type: 'run-finished', runId, batchId: item!.batchId, record });
-      settleWaiters();
+      if (index !== -1) {
+        const [item] = queue.splice(index, 1);
+        const record = store.updateRun(runId, { status: 'cancelled', finishedAt: Date.now() });
+        emit({ type: 'run-finished', runId, batchId: item!.batchId, record });
+        settleWaiters();
+        return true;
+      }
+
+      // Case 2: run is paused in awaiting_human — tear down the live context.
+      const paused = pausedRuns.get(runId);
+      if (paused) {
+        clearTimeout(paused.deadlineTimer);
+        pausedRuns.delete(runId);
+
+        const resolvedAt = Date.now();
+        const assistFinal: AssistState = {
+          ...paused.assist,
+          resolvedAt,
+          resolution: 'cancelled',
+        };
+
+        // Close the browser context — the operator cancelled, no further use.
+        paused.context.close().catch(() => {});
+
+        const record = store.updateRun(runId, {
+          status: 'cancelled',
+          finishedAt: resolvedAt,
+          assist: assistFinal,
+        });
+        emit({ type: 'run-resumed', runId, batchId: paused.item.batchId, resolution: 'cancelled' });
+        emit({ type: 'run-finished', runId, batchId: paused.item.batchId, record });
+
+        // Re-account for the worker slot that was freed on pause.
+        paused.terminated = true;
+        active++;
+        paused.wakeResolve();
+
+        settleWaiters();
+        pump();
+        return true;
+      }
+
+      return false;
+    },
+
+    resume(runId: string): boolean {
+      const paused = pausedRuns.get(runId);
+      if (!paused) return false;
+
+      // Clear the deadline timer — we're resuming before expiry.
+      clearTimeout(paused.deadlineTimer);
+      pausedRuns.delete(runId);
+
+      // Persist transition back to running.
+      store.updateRun(runId, { status: 'running' });
+
+      // Bank cookies into the profile if the run uses one (T018).
+      const profileName = paused.item.spec.profile;
+      const doBanking =
+        profileName === undefined
+          ? Promise.resolve()
+          : bankAssistSolve(paused.page, profileName, store);
+
+      doBanking
+        .catch(() => {
+          // Banking failures must not abort the resume.
+        })
+        .finally(() => {
+          const resolvedAt = Date.now();
+          const assistFinal: AssistState = {
+            ...paused.assist,
+            resolvedAt,
+            resolution: 'solved',
+            solveSource: 'manual',
+          };
+          // Persist the resolved assist state before signalling.
+          store.updateRun(runId, { assist: assistFinal });
+
+          emit({
+            type: 'run-resumed',
+            runId,
+            batchId: paused.item.batchId,
+            resolution: 'solved',
+            solveSource: 'manual',
+          });
+
+          // Re-account for the worker slot: the loop continuation will
+          // complete inside runItem's .finally(), which decrements active and
+          // calls pump. We must increment active NOW so the concurrency cap
+          // accounts for this work resuming.
+          active++;
+
+          // Wake the suspended hook so the agent loop can continue on the
+          // same live page. `terminated` remains false so runItem proceeds.
+          paused.wakeResolve();
+        });
+
       return true;
+    },
+
+    async cdpSessionForRun(runId: string) {
+      const paused = pausedRuns.get(runId);
+      if (!paused) return null;
+      return manager.cdpSessionFor(paused.page);
     },
 
     onEvent(listener: (ev: RunEvent) => void): () => void {
@@ -418,7 +800,7 @@ export function createRunQueue(
     },
 
     drain(): Promise<void> {
-      if (active === 0 && queue.length === 0) return Promise.resolve();
+      if (active === 0 && queue.length === 0 && pausedRuns.size === 0) return Promise.resolve();
       return new Promise((resolve) => {
         drainWaiters.push(resolve);
       });
@@ -428,6 +810,12 @@ export function createRunQueue(
       shutdownPromise ??= (async () => {
         shuttingDown = true;
         clearWakeTimer();
+
+        // Expire all paused runs immediately on shutdown.
+        for (const runId of pausedRuns.keys()) {
+          expirePausedRun(runId);
+        }
+
         if (active > 0) {
           await new Promise<void>((resolve) => {
             idleWaiters.push(resolve);
@@ -561,6 +949,10 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
   }
 
   const page = await ctx.manager.newPage({ storageStatePath: session.storageStatePath });
+  // Track whether the agent loop paused for CAPTCHA — when true, the page
+  // context must NOT be closed here (the queue keeps it alive until resume
+  // or timeout). In all other cases the finally block closes it.
+  let pausing = false;
   try {
     const result = await runAgent({
       goal: spec.goal,
@@ -568,8 +960,21 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
       schema: spec.schemaJson ? jsonSchemaToZod(spec.schemaJson) : undefined,
       maxSteps: spec.maxSteps,
       page,
-      provider: ctx.provider,
+      // Forward the queue-injected provider when one exists (CLI --provider /
+      // --model override): it is already constructed so forwarding it never
+      // triggers eager key validation. When no provider was injected (server /
+      // assist path), pass undefined so runAgent's lazy thunk defers
+      // createProvider() to the first chat() call — after challenge detection
+      // can pause the run, preserving the keyless-pause behaviour.
+      provider: ctx.injectedProvider,
       credentials,
+      assistEnabled: spec.assist === true,
+      // Wrap the queue hook to inject `page` — the agent loop only supplies
+      // (detection, stepIndex); the queue needs the live page for context
+      // banking and timeout teardown (T015, T016, T018).
+      onAwaitingHuman: ctx.onAwaitingHuman
+        ? (detection, stepIndex) => ctx.onAwaitingHuman!(page, detection, stepIndex)
+        : undefined,
       onStep: (step) => {
         ctx.onStep(step);
         // Queue the capture after the step event so 'run-screenshot' always
@@ -577,6 +982,19 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
         ctx.screenshots.capture(page, step.index);
       },
     });
+    if (result.status === 'awaiting_human') {
+      // Return the live page so the queue can keep the context alive.
+      // Mark pausing so the finally block skips context teardown.
+      pausing = true;
+      return {
+        status: result.status,
+        assist: result.assist,
+        failureReason: result.failureReason,
+        usage: result.usage,
+        finalUrl: result.finalUrl,
+        livePage: page,
+      };
+    }
     return {
       status: result.status,
       output: result.output,
@@ -587,10 +1005,13 @@ async function executeAgent(spec: RunSpec, ctx: ExecuteRunCtx): Promise<ExecuteR
   } finally {
     // Let in-flight captures land while the page is still alive.
     await ctx.screenshots.flush();
-    await page
-      .context()
-      .close()
-      .catch(() => {});
+    // For awaiting_human, do NOT close the context — the queue owns teardown.
+    if (!pausing) {
+      await page
+        .context()
+        .close()
+        .catch(() => {});
+    }
   }
 }
 

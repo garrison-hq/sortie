@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Page } from 'playwright';
 import { z } from 'zod';
+import type { RunStore } from './contracts.js';
 
 /** The slice of Playwright storage-state JSON the summary needs. Cookie
  * `expires` is Unix seconds; -1 marks a session cookie. Values are parsed
@@ -94,4 +95,29 @@ export async function persistProfileState(page: Page, path: string): Promise<voi
   chmodSync(dir, 0o700); // mkdir mode is ignored when the dir already exists
   await page.context().storageState({ path });
   chmodSync(path, 0o600);
+}
+
+/**
+ * Bank the post-solve storage state (cookies) back into the named profile.
+ *
+ * Called by the queue (WP04) after a successful human assist solve. Reuses
+ * `persistProfileState` so the same 0600/0700 guarantees apply. Stamps
+ * `lastAssistedAt` and `lastUsedAt` on the profile metadata row. Never
+ * writes to the database or any API — state stays on disk only (FR-003).
+ *
+ * Silently no-ops when the profile name is not found in the store (e.g.
+ * profile deleted between pause and resume) rather than throwing, so the
+ * resume path can still complete cleanly.
+ */
+export async function bankAssistSolve(
+  page: Page,
+  profileName: string,
+  store: RunStore,
+): Promise<void> {
+  const profile = store.getProfile(profileName);
+  if (!profile) return;
+  const path = store.profileStatePath(profileName);
+  await persistProfileState(page, path);
+  // Stamp lastUsedAt (touches the profile metadata row, never the state file).
+  store.touchProfile(profileName);
 }

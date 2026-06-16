@@ -50,6 +50,24 @@ export type {
   RunEvent,
   QueueOptions,
   RunQueue,
+  // Live-view WebSocket protocol (WP01/WP05)
+  LvClientMessage,
+  LvServerMessage,
+  LvAttach,
+  LvDetach,
+  LvMouse,
+  LvKey,
+  LvResume,
+  LvCancel,
+  LvStarted,
+  LvFrame,
+  LvStopped,
+} from './contracts.js';
+
+export {
+  // Live-view zod schemas — needed by ws.ts to validate inbound messages.
+  LvClientMessageSchema,
+  LvServerMessageSchema,
 } from './contracts.js';
 
 // LLM provider layer. (Contract types re-exported by llm/index.js are

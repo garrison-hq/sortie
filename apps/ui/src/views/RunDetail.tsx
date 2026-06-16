@@ -7,11 +7,12 @@ import {
   screenshotImageUrl,
 } from '../api';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { LiveView } from '../components/LiveView';
 import { StatusChip } from '../components/StatusChip';
 import { StepItem } from '../components/StepItem';
-import type { RunRecord, StepRecord } from '../types';
+import type { AssistState, LvClientMessage, RunRecord, StepRecord } from '../types';
 import { formatDuration, isSlug, messageOf, shortId } from '../util';
-import { subscribeStatus, useRunEvents } from '../ws';
+import { send, subscribeStatus, trackAwaitingRun, useRunEvents } from '../ws';
 
 const TICK_INTERVAL_MS = 1000;
 /** Keep auto-scrolling while the user is within this many px of the bottom. */
@@ -71,6 +72,103 @@ function OutputPane({ record, outputJson, inFlight, copied, onCopy }: Readonly<O
   );
 }
 
+/** Format seconds remaining as m:ss or s. */
+function formatCountdown(ms: number): string {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (minutes > 0) return `${String(minutes)}:${String(seconds).padStart(2, '0')}`;
+  return `${String(seconds)}s`;
+}
+
+/** Play a short, mutable audible alert using the Web Audio API. */
+function playAlert(audioCtxRef: React.MutableRefObject<AudioContext | null>): void {
+  try {
+    const ctx = audioCtxRef.current ?? new AudioContext();
+    audioCtxRef.current = ctx;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {
+        // Autoplay policy — best effort; audio is non-critical
+      });
+    }
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.4);
+  } catch {
+    // Web Audio unavailable (e.g. jsdom in tests) — silently skip
+  }
+}
+
+/** Stable send callback for lv:* messages (wraps the ws singleton). */
+function useSend(): (msg: LvClientMessage) => void {
+  return useCallback((msg: LvClientMessage) => send(msg), []);
+}
+
+interface AwaitingBannerProps {
+  runId: string;
+  assist: AssistState;
+  now: number;
+  muted: boolean;
+  onToggleMute: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+  sendMsg: (msg: LvClientMessage) => void;
+}
+
+/** Banner shown while the run is paused waiting for a human to solve a CAPTCHA.
+ * Mounts <LiveView> for the interactive canvas (T028). */
+function AwaitingBanner({
+  runId,
+  assist,
+  now,
+  muted,
+  onToggleMute,
+  onResume,
+  onCancel,
+  sendMsg,
+}: Readonly<AwaitingBannerProps>) {
+  const remainingMs = assist.deadlineAt - now;
+
+  return (
+    <div className="awaiting-banner" role="alert" aria-live="assertive">
+      <div className="awaiting-banner-header">
+        <span className="awaiting-banner-title">
+          Solve the challenge below — auto-resumes when cleared
+        </span>
+        <span className="awaiting-banner-countdown" aria-label="Time remaining">
+          {formatCountdown(remainingMs)}
+        </span>
+        <button
+          type="button"
+          className="btn btn-small"
+          onClick={onToggleMute}
+          aria-label={muted ? 'Unmute alert sound' : 'Mute alert sound'}
+          title={muted ? 'Unmute' : 'Mute'}
+        >
+          {muted ? '🔇' : '🔔'}
+        </button>
+        <button type="button" className="btn btn-small" onClick={onResume}>
+          Resume
+        </button>
+        <button type="button" className="btn btn-small btn-danger" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <div className="liveview-container">
+        <LiveView runId={runId} send={sendMsg} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Live run view: header (status/duration), latest screenshot + final output
  * on the left, the step timeline on the right. Mounted with key={runId}, so
@@ -86,10 +184,17 @@ export function RunDetail({ runId }: { runId: string }) {
   const [copied, setCopied] = useState(false);
   const [savedQueryName, setSavedQueryName] = useState<string | null>(null);
 
+  // Assist / awaiting_human state (T028)
+  const [assistState, setAssistState] = useState<AssistState | null>(null);
+  const [muted, setMuted] = useState(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
   const shotIndexRef = useRef(-1);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const wasDisconnectedRef = useRef(false);
+
+  const sendMsg = useSend();
 
   /** Dedupe by step index; WS events and the REST snapshot may overlap. */
   const mergeSteps = useCallback((incoming: StepRecord[]) => {
@@ -115,6 +220,10 @@ export function RunDetail({ runId }: { runId: string }) {
       setRecord(fetched);
       mergeSteps(fetchedSteps);
       setError(null);
+      // Restore assist state if the run is already awaiting_human on load
+      if (fetched.status === 'awaiting_human' && fetched.assist) {
+        setAssistState(fetched.assist);
+      }
     } catch (err) {
       setError(messageOf(err));
     } finally {
@@ -147,8 +256,27 @@ export function RunDetail({ runId }: { runId: string }) {
     [load],
   );
 
+  // Register the run with the ws singleton while awaiting_human so reconnect
+  // re-attaches the live-view session (T029).
+  useEffect(() => {
+    if (assistState === null) return;
+    return trackAwaitingRun(runId);
+  }, [runId, assistState]);
+
   useRunEvents((ev) => {
     if (ev.runId !== runId) return;
+
+    if (ev.type === 'run-awaiting-human') {
+      setAssistState(ev.assist);
+      if (!muted) playAlert(audioCtxRef);
+      return;
+    }
+
+    if (ev.type === 'run-resumed') {
+      setAssistState(null);
+      return;
+    }
+
     if (ev.record) setRecord(ev.record);
     if (ev.step) mergeSteps([ev.step]);
     if (ev.type === 'run-screenshot' && ev.screenshot) {
@@ -157,15 +285,24 @@ export function RunDetail({ runId }: { runId: string }) {
         url: screenshotImageUrl(runId, ev.screenshot),
       });
     }
+
+    // Dismiss the live view on run-finished.
+    if (ev.type === 'run-finished') {
+      setAssistState(null);
+    }
   });
 
-  // Tick the duration display while the run is in flight.
-  const inFlight = record !== null && (record.status === 'queued' || record.status === 'running');
+  // Tick the duration display while the run is in flight (also drives countdown).
+  const inFlight =
+    record !== null &&
+    (record.status === 'queued' ||
+      record.status === 'running' ||
+      record.status === 'awaiting_human');
   useEffect(() => {
-    if (!inFlight) return;
+    if (!inFlight && assistState === null) return;
     const timer = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [inFlight]);
+  }, [inFlight, assistState]);
 
   // Auto-scroll the timeline unless the user scrolled away from the bottom.
   useEffect(() => {
@@ -228,6 +365,14 @@ export function RunDetail({ runId }: { runId: string }) {
     URL.revokeObjectURL(url);
   }
 
+  function handleResume(): void {
+    sendMsg({ t: 'lv:resume', runId });
+  }
+
+  function handleCancel(): void {
+    sendMsg({ t: 'lv:cancel', runId });
+  }
+
   if (!loaded) {
     return <div className="loading">Loading run {shortId(runId)}…</div>;
   }
@@ -250,6 +395,21 @@ export function RunDetail({ runId }: { runId: string }) {
   return (
     <div>
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+      {/* Awaiting-human banner + live canvas (T028). Only shown when assist-paused. */}
+      {assistState !== null && (
+        <AwaitingBanner
+          runId={runId}
+          assist={assistState}
+          now={now}
+          muted={muted}
+          onToggleMute={() => setMuted((m) => !m)}
+          onResume={handleResume}
+          onCancel={handleCancel}
+          sendMsg={sendMsg}
+        />
+      )}
+
       <div className="run-header">
         <span className="kind-badge">{record.spec.kind}</span>
         <StatusChip status={record.status} />

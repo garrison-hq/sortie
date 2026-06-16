@@ -2,11 +2,11 @@
   "created_at": "2026-06-16T19:13:38.027672+00:00",
   "friendly_name": "Assisted CAPTCHA Solving",
   "mission_id": "01KV8XMZQ0XZ23FFNVAVSS9E40",
-  "mission_number": null,
+  "mission_number": 1,
   "mission_slug": "assisted-captcha-solving-01KV8XMZ",
   "mission_type": "software-dev",
   "slug": "assisted-captcha-solving-01KV8XMZ",
+  "source_description": "Opt-in assist mode that reduces how often runs trigger anti-bot challenges and, when one fires, lets a human solve it via remote browser streaming in the sortie UI. No automated/LLM/third-party solving.",
   "target_branch": "main",
-  "vcs": "git",
-  "source_description": "Opt-in assist mode that reduces how often runs trigger anti-bot challenges and, when one fires, lets a human solve it via remote browser streaming in the sortie UI. No automated/LLM/third-party solving."
+  "vcs": "git"
 }

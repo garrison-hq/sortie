@@ -27,7 +27,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   await app.register(websocket);
-  registerEventsRoute(app, deps.queue);
+  registerEventsRoute(app, deps.queue, deps.store);
   registerRoutes(app, deps);
 
   const uiDist = resolveUiDist();
