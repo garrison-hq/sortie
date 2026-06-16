@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-06-16T19:13:38.027672+00:00",
+  "friendly_name": "assisted captcha solving",
+  "mission_id": "01KV8XMZQ0XZ23FFNVAVSS9E40",
+  "mission_number": null,
+  "mission_slug": "assisted-captcha-solving-01KV8XMZ",
+  "mission_type": "software-dev",
+  "slug": "assisted-captcha-solving-01KV8XMZ",
+  "target_branch": "main"
+}
