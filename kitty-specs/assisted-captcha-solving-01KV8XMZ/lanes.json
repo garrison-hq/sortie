@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "mission_slug": "assisted-captcha-solving-01KV8XMZ",
+  "mission_id": "01KV8XMZQ0XZ23FFNVAVSS9E40",
+  "mission_branch": "kitty/mission-assisted-captcha-solving-01KV8XMZ",
+  "target_branch": "feat/assisted-captcha-solving",
+  "lanes": [
+    {
+      "lane_id": "lane-a",
+      "wp_ids": [
+        "WP01",
+        "WP02",
+        "WP03",
+        "WP04",
+        "WP05",
+        "WP06",
+        "WP07"
+      ],
+      "write_scope": [
+        "apps/mcp/src/index.ts",
+        "apps/server/src/liveview.ts",
+        "apps/server/src/routes.ts",
+        "apps/server/src/ws.ts",
+        "apps/ui/e2e/**",
+        "apps/ui/src/components/LiveView.tsx",
+        "apps/ui/src/views/NewRun.tsx",
+        "apps/ui/src/views/RunDetail.tsx",
+        "apps/ui/src/ws.ts",
+        "packages/core/src/agent/loop.ts",
+        "packages/core/src/browser/hygiene.ts",
+        "packages/core/src/browser/manager.ts",
+        "packages/core/src/challenge/**",
+        "packages/core/src/cli.ts",
+        "packages/core/src/contracts.ts",
+        "packages/core/src/profiles.ts",
+        "packages/core/src/runtime/queue.ts",
+        "packages/core/src/search/engines.ts",
+        "packages/core/src/store/**"
+      ],
+      "predicted_surfaces": [
+        "api",
+        "app-shell",
+        "artifact-rendering",
+        "legacy-cleanup"
+      ],
+      "depends_on_lanes": [],
+      "parallel_group": 0
+    }
+  ],
+  "computed_at": "2026-06-16T19:53:59.176382+00:00",
+  "computed_from": "dependency_graph+ownership",
+  "planning_artifact_wps": [],
+  "collapse_report": {
+    "events": [
+      {
+        "wp_a": "WP03",
+        "wp_b": "WP01",
+        "rule": "dependency",
+        "evidence": "WP03 depends on WP01"
+      },
+      {
+        "wp_a": "WP04",
+        "wp_b": "WP01",
+        "rule": "dependency",
+        "evidence": "WP04 depends on WP01"
+      },
+      {
+        "wp_a": "WP05",
+        "wp_b": "WP01",
+        "rule": "dependency",
+        "evidence": "WP05 depends on WP01"
+      },
+      {
+        "wp_a": "WP05",
+        "wp_b": "WP02",
+        "rule": "dependency",
+        "evidence": "WP05 depends on WP02"
+      },
+      {
+        "wp_a": "WP06",
+        "wp_b": "WP01",
+        "rule": "dependency",
+        "evidence": "WP06 depends on WP01"
+      },
+      {
+        "wp_a": "WP07",
+        "wp_b": "WP03",
+        "rule": "dependency",
+        "evidence": "WP07 depends on WP03"
+      }
+    ],
+    "total_merges": 6,
+    "independent_wps_collapsed": 0,
+    "by_rule": {
+      "dependency": 6
+    }
+  }
+}

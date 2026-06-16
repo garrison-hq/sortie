@@ -9,9 +9,9 @@ requirement_refs:
 - FR-011
 - FR-012
 - NFR-002
-planning_base_branch: main
-merge_target_branch: main
-branch_strategy: Execution worktrees are allocated per computed lane from lanes.json. Plan/merge base is main; mission integrates on feat/assisted-captcha-solving → PR to main.
+planning_base_branch: feat/assisted-captcha-solving
+merge_target_branch: feat/assisted-captcha-solving
+branch_strategy: Planning artifacts for this feature were generated on feat/assisted-captcha-solving. During /spec-kitty.implement this WP may branch from a dependency-specific base, but completed changes must merge back into feat/assisted-captcha-solving unless the human explicitly redirects the landing branch.
 subtasks:
 - T011
 - T012
