@@ -30,12 +30,12 @@
 | T018 | `profiles.bankAssistSolve()` + `lastAssistedAt`                             | WP04 |          | [D] |
 | T019 | Store persistence for `awaiting_human`/assist/`captcha_unsolved`            | WP04 |          | [D] |
 | T020 | Queue unit tests (non-blocking, timeout, resume, cap)                       | WP04 |          | [D] |
-| T021 | `liveview.ts` screencast bridge (CDP→`lv:frame`, ack, backpressure)         | WP05 |          |
-| T022 | `liveview.ts` input dispatch (`lv:*`→CDP Input) + coord mapping             | WP05 |          |
-| T023 | `ws.ts` bidirectional: parse/scope `lv:*`, wire new run events              | WP05 |          |
-| T024 | `routes.ts` resume + extend cancel for `awaiting_human`                     | WP05 |          |
-| T025 | Server-side validation/scoping of live-view messages                        | WP05 |          |
-| T026 | Server tests (scoping, resume state, timeout)                               | WP05 |          |
+| T021 | `liveview.ts` screencast bridge (CDP→`lv:frame`, ack, backpressure)         | WP05 |          | [D] |
+| T022 | `liveview.ts` input dispatch (`lv:*`→CDP Input) + coord mapping             | WP05 |          | [D] |
+| T023 | `ws.ts` bidirectional: parse/scope `lv:*`, wire new run events              | WP05 |          | [D] |
+| T024 | `routes.ts` resume + extend cancel for `awaiting_human`                     | WP05 |          | [D] |
+| T025 | Server-side validation/scoping of live-view messages                        | WP05 |          | [D] |
+| T026 | Server tests (scoping, resume state, timeout)                               | WP05 |          | [D] |
 | T027 | `LiveView.tsx` canvas render + input capture + coord map                    | WP06 |          |
 | T028 | `RunDetail.tsx` awaiting_human banner + sound + Resume/Cancel + countdown   | WP06 |          |
 | T029 | `ui/ws.ts` outbound `lv:*` + handle new events + reconnect re-attach        | WP06 |          |
@@ -142,12 +142,12 @@ cancel endpoints.
 by the connection; resume endpoint enforces state; frames flow only while paused.
 **Requirements**: FR-008, FR-011, NFR-001, NFR-004 (+ C-003/C-004 security)
 
-- [ ] T021 `liveview.ts` screencast bridge (WP05)
-- [ ] T022 `liveview.ts` input dispatch + coord mapping (WP05)
-- [ ] T023 `ws.ts` bidirectional + wire new run events (WP05)
-- [ ] T024 `routes.ts` resume + extend cancel (WP05)
-- [ ] T025 server-side validation/scoping of live-view messages (WP05)
-- [ ] T026 server tests (WP05)
+- [x] T021 `liveview.ts` screencast bridge (WP05)
+- [x] T022 `liveview.ts` input dispatch + coord mapping (WP05)
+- [x] T023 `ws.ts` bidirectional + wire new run events (WP05)
+- [x] T024 `routes.ts` resume + extend cancel (WP05)
+- [x] T025 server-side validation/scoping of live-view messages (WP05)
+- [x] T026 server tests (WP05)
 
 **Dependencies**: WP01, WP02, WP04.
 
