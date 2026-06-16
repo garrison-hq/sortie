@@ -36,11 +36,11 @@
 | T024 | `routes.ts` resume + extend cancel for `awaiting_human`                     | WP05 |          | [D] |
 | T025 | Server-side validation/scoping of live-view messages                        | WP05 |          | [D] |
 | T026 | Server tests (scoping, resume state, timeout)                               | WP05 |          | [D] |
-| T027 | `LiveView.tsx` canvas render + input capture + coord map                    | WP06 |          |
-| T028 | `RunDetail.tsx` awaiting_human banner + sound + Resume/Cancel + countdown   | WP06 |          |
-| T029 | `ui/ws.ts` outbound `lv:*` + handle new events + reconnect re-attach        | WP06 |          |
-| T030 | `NewRun.tsx` assist toggle                                                  | WP06 |          |
-| T031 | UI component/e2e wiring for live view                                       | WP06 |          |
+| T027 | `LiveView.tsx` canvas render + input capture + coord map                    | WP06 |          | [D] |
+| T028 | `RunDetail.tsx` awaiting_human banner + sound + Resume/Cancel + countdown   | WP06 |          | [D] |
+| T029 | `ui/ws.ts` outbound `lv:*` + handle new events + reconnect re-attach        | WP06 |          | [D] |
+| T030 | `NewRun.tsx` assist toggle                                                  | WP06 |          | [D] |
+| T031 | UI component/e2e wiring for live view                                       | WP06 |          | [D] |
 | T032 | `cli.ts` `--assist` (agent/batch) + server-reachability fallback            | WP07 |          |
 | T033 | `mcp/index.ts` assist arg + non-interactive graceful fallback               | WP07 |          |
 | T034 | Local fake-challenge page fixture                                           | WP07 |          |
@@ -161,11 +161,11 @@ toggle on New Run.
 click sends a mapped `lv:mouse`; Resume posts/sends control; toggle sets `assist` in spec.
 **Requirements**: FR-001, FR-008, FR-009, FR-010, FR-011
 
-- [ ] T027 `LiveView.tsx` canvas render + input capture (WP06)
-- [ ] T028 `RunDetail.tsx` banner + sound + Resume/Cancel + countdown (WP06)
-- [ ] T029 `ui/ws.ts` outbound `lv:*` + handle events + reconnect re-attach (WP06)
-- [ ] T030 `NewRun.tsx` assist toggle (WP06)
-- [ ] T031 UI component/e2e wiring (WP06)
+- [x] T027 `LiveView.tsx` canvas render + input capture (WP06)
+- [x] T028 `RunDetail.tsx` banner + sound + Resume/Cancel + countdown (WP06)
+- [x] T029 `ui/ws.ts` outbound `lv:*` + handle events + reconnect re-attach (WP06)
+- [x] T030 `NewRun.tsx` assist toggle (WP06)
+- [x] T031 UI component/e2e wiring (WP06)
 
 **Dependencies**: WP01, WP05.
 
