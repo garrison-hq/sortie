@@ -19,8 +19,8 @@ subtasks:
 - T034
 - T035
 - T036
-agent: "claude:sonnet:implementer:implementer"
-shell_pid: "490702"
+agent: "claude:opus:reviewer:reviewer"
+shell_pid: "501725"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/ui/e2e/
@@ -134,3 +134,4 @@ Run `spec-kitty agent action implement WP07 --agent <name>` (after WP03–WP06).
 - 2026-06-16T23:14:07Z – claude:opus:reviewer:reviewer – shell_pid=478161 – Moved to planned
 - 2026-06-16T23:14:48Z – claude:sonnet:implementer:implementer – shell_pid=490702 – Started implementation via action command
 - 2026-06-16T23:21:31Z – claude:sonnet:implementer:implementer – shell_pid=490702 – Fixed cycle-2: injected provider forwarded for agent specs (+regression test); assist keyless-pause + e2e still green
+- 2026-06-16T23:22:53Z – claude:opus:reviewer:reviewer – shell_pid=501725 – Started review via action command
