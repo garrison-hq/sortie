@@ -141,3 +141,4 @@ mouse/key/resume/cancel`.
 ## Activity Log
 
 - 2026-06-16T21:22:26Z – claude:sonnet:implementer:implementer – shell_pid=303834 – Started implementation via action command
+- 2026-06-16T21:35:05Z – claude:sonnet:implementer:implementer – shell_pid=303834 – Ready for review: CDP screencast bridge + input relay + bidirectional WS + resume/cancel HTTP endpoints. typecheck 0 errors, 298 tests passing, lint clean.
