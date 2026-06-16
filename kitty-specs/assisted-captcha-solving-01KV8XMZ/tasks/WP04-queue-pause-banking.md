@@ -23,6 +23,8 @@ subtasks:
 - T018
 - T019
 - T020
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "245227"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/runtime/
@@ -139,3 +141,7 @@ resumeSignal }>`.
 
 - Leaking live browser contexts on paused runs — the cap + timeout bound this; ensure
   teardown on every terminal transition (resume-complete, timeout, cancel, process error).
+
+## Activity Log
+
+- 2026-06-16T20:37:29Z – claude:sonnet:implementer:implementer – shell_pid=245227 – Started implementation via action command
