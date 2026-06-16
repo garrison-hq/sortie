@@ -20,8 +20,8 @@ subtasks:
 - T024
 - T025
 - T026
-agent: "claude:opus:reviewer:reviewer"
-shell_pid: "332416"
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "340276"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/server/src/
@@ -144,3 +144,4 @@ mouse/key/resume/cancel`.
 - 2026-06-16T21:35:05Z – claude:sonnet:implementer:implementer – shell_pid=303834 – Ready for review: CDP screencast bridge + input relay + bidirectional WS + resume/cancel HTTP endpoints. typecheck 0 errors, 298 tests passing, lint clean.
 - 2026-06-16T21:35:47Z – claude:opus:reviewer:reviewer – shell_pid=332416 – Started review via action command
 - 2026-06-16T21:39:27Z – claude:opus:reviewer:reviewer – shell_pid=332416 – Moved to planned
+- 2026-06-16T21:40:10Z – claude:sonnet:implementer:implementer – shell_pid=340276 – Started implementation via action command
