@@ -133,3 +133,4 @@ Run `spec-kitty agent action implement WP07 --agent <name>` (after WP03–WP06).
 - 2026-06-16T23:09:05Z – claude:opus:reviewer:reviewer – shell_pid=478161 – Started review via action command
 - 2026-06-16T23:14:07Z – claude:opus:reviewer:reviewer – shell_pid=478161 – Moved to planned
 - 2026-06-16T23:14:48Z – claude:sonnet:implementer:implementer – shell_pid=490702 – Started implementation via action command
+- 2026-06-16T23:21:31Z – claude:sonnet:implementer:implementer – shell_pid=490702 – Fixed cycle-2: injected provider forwarded for agent specs (+regression test); assist keyless-pause + e2e still green
