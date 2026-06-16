@@ -41,11 +41,11 @@
 | T029 | `ui/ws.ts` outbound `lv:*` + handle new events + reconnect re-attach        | WP06 |          | [D] |
 | T030 | `NewRun.tsx` assist toggle                                                  | WP06 |          | [D] |
 | T031 | UI component/e2e wiring for live view                                       | WP06 |          | [D] |
-| T032 | `cli.ts` `--assist` (agent/batch) + server-reachability fallback            | WP07 |          |
-| T033 | `mcp/index.ts` assist arg + non-interactive graceful fallback               | WP07 |          |
-| T034 | Local fake-challenge page fixture                                           | WP07 |          |
-| T035 | e2e: detect→pause→stream→input→auto-resume + non-blocking + timeout         | WP07 |          |
-| T036 | Assist-off regression assertion                                             | WP07 |          |
+| T032 | `cli.ts` `--assist` (agent/batch) + server-reachability fallback            | WP07 |          | [D] |
+| T033 | `mcp/index.ts` assist arg + non-interactive graceful fallback               | WP07 |          | [D] |
+| T034 | Local fake-challenge page fixture                                           | WP07 |          | [D] |
+| T035 | e2e: detect→pause→stream→input→auto-resume + non-blocking + timeout         | WP07 |          | [D] |
+| T036 | Assist-off regression assertion                                             | WP07 |          | [D] |
 
 ---
 
@@ -183,11 +183,11 @@ fake-challenge e2e, plus an assist-off regression assertion.
 assist on logs the fallback and fails gracefully; assist-off run behaves as today.
 **Requirements**: FR-001, FR-002, FR-017
 
-- [ ] T032 `cli.ts` `--assist` + server-reachability fallback (WP07)
-- [ ] T033 `mcp/index.ts` assist arg + non-interactive fallback (WP07)
-- [ ] T034 local fake-challenge page fixture (WP07)
-- [ ] T035 e2e detect→pause→stream→input→auto-resume + non-blocking + timeout (WP07)
-- [ ] T036 assist-off regression assertion (WP07)
+- [x] T032 `cli.ts` `--assist` + server-reachability fallback (WP07)
+- [x] T033 `mcp/index.ts` assist arg + non-interactive fallback (WP07)
+- [x] T034 local fake-challenge page fixture (WP07)
+- [x] T035 e2e detect→pause→stream→input→auto-resume + non-blocking + timeout (WP07)
+- [x] T036 assist-off regression assertion (WP07)
 
 **Dependencies**: WP03, WP04, WP05, WP06.
 
