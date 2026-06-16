@@ -19,6 +19,8 @@ subtasks:
 - T034
 - T035
 - T036
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "388326"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/ui/e2e/
@@ -119,3 +121,7 @@ Run `spec-kitty agent action implement WP07 --agent <name>` (after WP03–WP06).
 
 - e2e flakiness around screencast timing — assert on the run reaching `awaiting_human` and on
   a received frame rather than pixel content; allow generous waits.
+
+## Activity Log
+
+- 2026-06-16T22:09:58Z – claude:sonnet:implementer:implementer – shell_pid=388326 – Started implementation via action command

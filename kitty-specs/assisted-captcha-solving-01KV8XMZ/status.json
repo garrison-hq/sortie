@@ -1,7 +1,7 @@
 {
-  "event_count": 52,
-  "last_event_id": "01KV97P8E4K46FTN6781HBJ72M",
-  "materialized_at": "2026-06-16T22:09:05.476816+00:00",
+  "event_count": 54,
+  "last_event_id": "01KV97QVSGDB9GQ0VRBDCFN436",
+  "materialized_at": "2026-06-16T22:09:58.064526+00:00",
   "mission_number": "",
   "mission_slug": "assisted-captcha-solving-01KV8XMZ",
   "mission_type": "software-dev",
@@ -12,9 +12,9 @@
     "claimed": 0,
     "done": 0,
     "for_review": 0,
-    "in_progress": 0,
+    "in_progress": 1,
     "in_review": 0,
-    "planned": 1
+    "planned": 0
   },
   "work_packages": {
     "WP01": {
@@ -60,11 +60,11 @@
       "last_transition_at": "2026-06-16T22:09:05.476816+00:00"
     },
     "WP07": {
-      "actor": "finalize-tasks",
+      "actor": "claude:sonnet:implementer:implementer",
       "force_count": 1,
-      "lane": "planned",
-      "last_event_id": "01KV8ZYW3YS9D8Q3GE4BW1N6FF",
-      "last_transition_at": "2026-06-16T19:53:59.166127+00:00"
+      "lane": "in_progress",
+      "last_event_id": "01KV97QVSGDB9GQ0VRBDCFN436",
+      "last_transition_at": "2026-06-16T22:09:58.064526+00:00"
     }
   }
 }
