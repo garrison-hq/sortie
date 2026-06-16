@@ -149,3 +149,4 @@ mouse/key/resume/cancel`.
 - 2026-06-16T21:47:12Z – claude:opus:reviewer:reviewer – shell_pid=352190 – Started review via action command
 - 2026-06-16T21:52:33Z – claude:opus:reviewer:reviewer – shell_pid=352190 – Moved to planned
 - 2026-06-16T21:53:16Z – claude:sonnet:implementer:implementer – shell_pid=361959 – Started implementation via action command
+- 2026-06-16T21:55:36Z – claude:sonnet:implementer:implementer – shell_pid=361959 – Fixed cycle-2: Page.enable makes origin guard fire in production; test now asserts it
