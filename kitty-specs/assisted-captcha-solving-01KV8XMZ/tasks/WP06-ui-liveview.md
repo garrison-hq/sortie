@@ -19,6 +19,8 @@ subtasks:
 - T029
 - T030
 - T031
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "370109"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/ui/src/
@@ -114,3 +116,7 @@ Run `spec-kitty agent action implement WP06 --agent <name>` (after WP01, WP05).
 
 - Canvas input fidelity (key modifiers, wheel). Keep the mapping in `LiveView` and unit-test
   the coordinate transform.
+
+## Activity Log
+
+- 2026-06-16T21:58:05Z – claude:sonnet:implementer:implementer – shell_pid=370109 – Started implementation via action command
