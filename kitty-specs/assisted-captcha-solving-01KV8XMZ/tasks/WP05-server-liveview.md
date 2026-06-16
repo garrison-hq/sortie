@@ -20,8 +20,8 @@ subtasks:
 - T024
 - T025
 - T026
-agent: "claude:opus:reviewer:reviewer"
-shell_pid: "352190"
+agent: "claude:sonnet:implementer:implementer"
+shell_pid: "361959"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/server/src/
@@ -148,3 +148,4 @@ mouse/key/resume/cancel`.
 - 2026-06-16T21:46:37Z – claude:sonnet:implementer:implementer – shell_pid=340276 – Fixed cycle-1 security gaps: origin constraint, input status-gate, session teardown; added real scoping tests
 - 2026-06-16T21:47:12Z – claude:opus:reviewer:reviewer – shell_pid=352190 – Started review via action command
 - 2026-06-16T21:52:33Z – claude:opus:reviewer:reviewer – shell_pid=352190 – Moved to planned
+- 2026-06-16T21:53:16Z – claude:sonnet:implementer:implementer – shell_pid=361959 – Started implementation via action command
