@@ -145,3 +145,4 @@ null>` that reads status/title/body/iframe srcs and calls the pure function.
 - 2026-06-16T20:00:07Z – claude:sonnet:implementer:implementer – shell_pid=176215 – Assigned agent via action command
 - 2026-06-16T20:15:28Z – claude:sonnet:implementer:implementer – shell_pid=176215 – Ready for review
 - 2026-06-16T20:15:55Z – claude:opus:reviewer:reviewer – shell_pid=198825 – Started review via action command
+- 2026-06-16T20:17:55Z – claude:opus:reviewer:reviewer – shell_pid=198825 – Review passed: additive contracts (assist/timeout, awaiting_human, ChallengeFamily/Detection/AssistState, live-view zod schemas), shared challenge/detect.ts imported+called by engines.ts, detection-only (C-001 ok), typecheck+lint clean, 228 core tests green.
