@@ -24,12 +24,12 @@
 | T012 | Post-distill challenge check → `awaiting_human` (on) / legacy fail (off)    | WP03 |          | [D] |
 | T013 | Resume re-entry at paused step on same page + pacing call                   | WP03 |          | [D] |
 | T014 | Loop unit tests (assist on/off paths)                                       | WP03 |          | [D] |
-| T015 | `pausedRuns` map + `pauseRun()` non-blocking                                | WP04 |          |
-| T016 | `resume(runId)` + bank cookies + emit `run-resumed`                         | WP04 |          |
-| T017 | Solve timeout (default 10m) → `captcha_unsolved`; concurrent-pause cap      | WP04 |          |
-| T018 | `profiles.bankAssistSolve()` + `lastAssistedAt`                             | WP04 |          |
-| T019 | Store persistence for `awaiting_human`/assist/`captcha_unsolved`            | WP04 |          |
-| T020 | Queue unit tests (non-blocking, timeout, resume, cap)                       | WP04 |          |
+| T015 | `pausedRuns` map + `pauseRun()` non-blocking                                | WP04 |          | [D] |
+| T016 | `resume(runId)` + bank cookies + emit `run-resumed`                         | WP04 |          | [D] |
+| T017 | Solve timeout (default 10m) → `captcha_unsolved`; concurrent-pause cap      | WP04 |          | [D] |
+| T018 | `profiles.bankAssistSolve()` + `lastAssistedAt`                             | WP04 |          | [D] |
+| T019 | Store persistence for `awaiting_human`/assist/`captcha_unsolved`            | WP04 |          | [D] |
+| T020 | Queue unit tests (non-blocking, timeout, resume, cap)                       | WP04 |          | [D] |
 | T021 | `liveview.ts` screencast bridge (CDP→`lv:frame`, ack, backpressure)         | WP05 |          |
 | T022 | `liveview.ts` input dispatch (`lv:*`→CDP Input) + coord mapping             | WP05 |          |
 | T023 | `ws.ts` bidirectional: parse/scope `lv:*`, wire new run events              | WP05 |          |
@@ -119,12 +119,12 @@ cap, cookie banking into the profile, and store persistence.
 `captcha_unsolved`; resume re-enters; cap degrades gracefully; profile state banked.
 **Requirements**: FR-007, FR-011, FR-012, FR-013, FR-014, FR-015, FR-016, NFR-005
 
-- [ ] T015 `pausedRuns` map + `pauseRun()` non-blocking (WP04)
-- [ ] T016 `resume(runId)` + bank cookies + emit `run-resumed` (WP04)
-- [ ] T017 solve timeout → `captcha_unsolved`; concurrent-pause cap (WP04)
-- [ ] T018 `profiles.bankAssistSolve()` + `lastAssistedAt` (WP04)
-- [ ] T019 store persistence for new status/reason/assist (WP04)
-- [ ] T020 queue unit tests (WP04)
+- [x] T015 `pausedRuns` map + `pauseRun()` non-blocking (WP04)
+- [x] T016 `resume(runId)` + bank cookies + emit `run-resumed` (WP04)
+- [x] T017 solve timeout → `captcha_unsolved`; concurrent-pause cap (WP04)
+- [x] T018 `profiles.bankAssistSolve()` + `lastAssistedAt` (WP04)
+- [x] T019 store persistence for new status/reason/assist (WP04)
+- [x] T020 queue unit tests (WP04)
 
 **Dependencies**: WP01, WP03.
 
