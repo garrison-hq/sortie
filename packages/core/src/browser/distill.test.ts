@@ -102,8 +102,12 @@ function makeFakeElement(init: FakeElementInit): FakeElement {
   const el: FakeElement = {
     tagName: init.tag.toUpperCase(),
     getAttribute: (name) => attrs.get(name) ?? null,
-    setAttribute: (name, value) => void attrs.set(name, value),
-    removeAttribute: (name) => void attrs.delete(name),
+    setAttribute: (name, value) => {
+      attrs.set(name, value);
+    },
+    removeAttribute: (name) => {
+      attrs.delete(name);
+    },
     getBoundingClientRect: () => ({ width: 100, height: 20 }),
     // Every fake is a candidate, mirroring the pre-shadow-DOM fixture shape.
     matches: () => true,

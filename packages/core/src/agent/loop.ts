@@ -90,14 +90,14 @@ export async function runAgent<T>(opts: AgentRunOptions<T>): Promise<AgentRunRes
       const startedAt = Date.now();
       const { url, title, snapshotBlock } = await snapshotPage(page);
 
-      if (pendingToolCallId !== undefined) {
+      if (pendingToolCallId === undefined) {
+        messages.push({ role: 'user', content: snapshotBlock });
+      } else {
         messages.push({
           role: 'toolResult',
           toolCallId: pendingToolCallId,
           content: `${pendingObservation}\n\n${snapshotBlock}`,
         });
-      } else {
-        messages.push({ role: 'user', content: snapshotBlock });
       }
 
       const response = await provider.chat({
@@ -132,40 +132,7 @@ export async function runAgent<T>(opts: AgentRunOptions<T>): Promise<AgentRunRes
       // sent to the provider gets a matching toolResult.
       messages.push({ role: 'assistant', content: response.text ?? '', toolCalls: [call] });
 
-      let observation: string;
-      let outcome: StepOutcome<T>;
-
-      if (call.name === DONE_TOOL) {
-        if (opts.schema) {
-          const parsed = opts.schema.safeParse(input['result']);
-          if (parsed.success) {
-            observation = 'Goal completed; result accepted.';
-            outcome = { kind: 'success', output: parsed.data };
-          } else {
-            observation = `Validation failed: ${formatIssues(parsed.error)}. Fix the result and call done again.`;
-            outcome = { kind: 'continue' };
-          }
-        } else {
-          observation = 'Goal completed; result accepted.';
-          outcome = { kind: 'success', output: input['result'] as T };
-        }
-      } else if (call.name === FAIL_TOOL) {
-        const rawReason = input['reason'];
-        const reason =
-          typeof rawReason === 'string' && rawReason.trim().length > 0
-            ? rawReason.trim()
-            : 'Agent called fail without giving a reason.';
-        observation = `Run marked as failed: ${reason}`;
-        outcome = { kind: 'failed', reason };
-      } else {
-        // executeAction never throws by contract (errors come back as
-        // observation text); the catch is a last-resort safety net.
-        observation = await executeAction(ctx, call.name, input).catch(
-          (err: unknown) =>
-            `Action "${call.name}" failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        outcome = { kind: 'continue' };
-      }
+      const { observation, outcome } = await resolveToolCall(ctx, call.name, input, opts.schema);
 
       const step: StepRecord = {
         index,
@@ -209,6 +176,68 @@ export async function runAgent<T>(opts: AgentRunOptions<T>): Promise<AgentRunRes
       await manager.close();
     }
   }
+}
+
+/**
+ * Resolve a single model tool call into the observation shown back to the
+ * model plus the loop `StepOutcome`. The done/fail tools are interpreted here
+ * (termination semantics live in the loop, not the executor); every other tool
+ * is run through `executeAction`, which never throws by contract.
+ */
+async function resolveToolCall<T>(
+  ctx: ExecutionContext,
+  toolName: string,
+  input: Record<string, unknown>,
+  schema: AgentRunOptions<T>['schema'],
+): Promise<{ observation: string; outcome: StepOutcome<T> }> {
+  if (toolName === DONE_TOOL) {
+    return resolveDone(input, schema);
+  }
+  if (toolName === FAIL_TOOL) {
+    return resolveFail(input);
+  }
+  // executeAction never throws by contract (errors come back as observation
+  // text); the catch is a last-resort safety net.
+  const observation = await executeAction(ctx, toolName, input).catch(
+    (err: unknown) =>
+      `Action "${toolName}" failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+  return { observation, outcome: { kind: 'continue' } };
+}
+
+function resolveDone<T>(
+  input: Record<string, unknown>,
+  schema: AgentRunOptions<T>['schema'],
+): { observation: string; outcome: StepOutcome<T> } {
+  if (!schema) {
+    return {
+      observation: 'Goal completed; result accepted.',
+      outcome: { kind: 'success', output: input['result'] as T },
+    };
+  }
+  const parsed = schema.safeParse(input['result']);
+  if (parsed.success) {
+    return {
+      observation: 'Goal completed; result accepted.',
+      outcome: { kind: 'success', output: parsed.data },
+    };
+  }
+  return {
+    observation: `Validation failed: ${formatIssues(parsed.error)}. Fix the result and call done again.`,
+    outcome: { kind: 'continue' },
+  };
+}
+
+function resolveFail<T>(input: Record<string, unknown>): {
+  observation: string;
+  outcome: StepOutcome<T>;
+} {
+  const rawReason = input['reason'];
+  const reason =
+    typeof rawReason === 'string' && rawReason.trim().length > 0
+      ? rawReason.trim()
+      : 'Agent called fail without giving a reason.';
+  return { observation: `Run marked as failed: ${reason}`, outcome: { kind: 'failed', reason } };
 }
 
 /**

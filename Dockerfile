@@ -53,6 +53,14 @@ COPY --from=build /app/apps/mcp/dist apps/mcp/dist
 ENV SORTIE_HOST=0.0.0.0 \
     SORTIE_PORT=3470 \
     SORTIE_DATA_DIR=/data
+
+# Run as the Playwright image's built-in non-root user (pwuser, UID 1000)
+# instead of root. The data dir and app tree are handed to it so the server
+# can persist without elevated privileges. NOTE: a host bind-mount at /data
+# must also be owned by UID 1000, or chown'd to it, for writes to succeed.
+RUN mkdir -p /data && chown -R pwuser:pwuser /app /data
+USER pwuser
+
 VOLUME /data
 EXPOSE 3470
 CMD ["node", "apps/server/dist/index.js"]

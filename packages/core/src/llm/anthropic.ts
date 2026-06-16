@@ -49,12 +49,12 @@ export class AnthropicProvider implements LlmProvider {
       model: this.model,
       max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: toAnthropicMessages(req.messages),
-      ...(req.system !== undefined ? { system: req.system } : {}),
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(req.system === undefined ? {} : { system: req.system }),
+      ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
       ...(req.tools !== undefined && req.tools.length > 0
         ? { tools: req.tools.map(toAnthropicTool) }
         : {}),
-      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+      ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
     });
 
     const textParts: string[] = [];

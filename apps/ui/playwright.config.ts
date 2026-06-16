@@ -8,12 +8,16 @@
  * browser worker and a real LLM call, so keep the suite single-worker and
  * in file order (later tests depend on the run created by the live flow).
  */
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
 
 const E2E_PORT = 3471;
-const E2E_DATA_DIR = '/tmp/sortie-e2e-data';
+// Unique 0700 directory per run (created once at config load) instead of a
+// predictable, world-readable /tmp path.
+const E2E_DATA_DIR = mkdtempSync(join(tmpdir(), 'sortie-e2e-'));
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export default defineConfig({

@@ -232,278 +232,316 @@ function errorResult(err: unknown) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
+type ToolResult = ReturnType<typeof textResult> | ReturnType<typeof errorResult>;
+
+/** True when `value` is an absolute http(s) URL string. */
+function isAbsoluteHttpUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//.test(value);
+}
+
+/** True when `value` is a positive integer (> 0). */
+function isPositiveInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** True when `value` is a non-null, non-array object (a JSON Schema object). */
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function handleWebOutline(args: unknown): Promise<ToolResult> {
+  const url = String((args as { url?: unknown })?.url ?? '');
+  if (!/^https?:\/\//.test(url)) {
+    return errorResult(new Error('web_outline: "url" must be an absolute http(s) URL'));
+  }
+  const snapshot = await withPage(undefined, async (page) => {
+    await navigateAndSettle(page, url);
+    return distillPage(page);
+  });
+  return textResult({
+    url: snapshot.url,
+    title: snapshot.title,
+    elementCount: snapshot.elements.length,
+    outline: snapshot.outline,
+    text: snapshot.text,
+  });
+}
+
+async function handleWebSearch(args: unknown): Promise<ToolResult> {
+  const { query, maxResults } = (args ?? {}) as { query?: unknown; maxResults?: unknown };
+  if (typeof query !== 'string' || query.trim().length === 0) {
+    return errorResult(new Error('web_search: "query" must be a non-empty string'));
+  }
+  if (maxResults !== undefined && !isPositiveInteger(maxResults)) {
+    return errorResult(new Error('web_search: "maxResults" must be a positive integer'));
+  }
+  const response = await search(query, { maxResults: maxResults as number | undefined });
+  return textResult(response);
+}
+
+async function handleWebFetch(args: unknown): Promise<ToolResult> {
+  const { url, maxChars } = (args ?? {}) as { url?: unknown; maxChars?: unknown };
+  if (!isAbsoluteHttpUrl(url)) {
+    return errorResult(new Error('web_fetch: "url" must be an absolute http(s) URL'));
+  }
+  if (maxChars !== undefined && !isPositiveInteger(maxChars)) {
+    return errorResult(new Error('web_fetch: "maxChars" must be a positive integer'));
+  }
+  const result = await fetchPage({ url, maxChars: maxChars as number | undefined });
+  // Markdown only — the plain-text rendering would double the payload.
+  return textResult({
+    url: result.url,
+    finalUrl: result.finalUrl,
+    title: result.title,
+    contentType: result.contentType,
+    truncated: result.truncated,
+    markdown: result.markdown,
+  });
+}
+
+async function handleWebExtract(args: unknown): Promise<ToolResult> {
+  const { url, schema, instruction, profile } = (args ?? {}) as {
+    url?: unknown;
+    schema?: unknown;
+    instruction?: unknown;
+    profile?: unknown;
+  };
+  if (!isAbsoluteHttpUrl(url)) {
+    return errorResult(new Error('web_extract: "url" must be an absolute http(s) URL'));
+  }
+  if (!isSchemaObject(schema)) {
+    return errorResult(new Error('web_extract: "schema" must be a JSON Schema object'));
+  }
+  const storageStatePath = resolveProfileArg('web_extract', profile);
+  const zodSchema = jsonSchemaToZod(schema);
+  // Own the page (instead of letting extract() navigate) so the
+  // profile's storage state can be loaded into the browser context.
+  const result = await withPage({ storageStatePath }, async (page) => {
+    const snapshot = await navigateOrPdfSnapshot(page, url);
+    return extract({
+      ...(snapshot ? { snapshot } : { page }),
+      schema: zodSchema,
+      instruction: typeof instruction === 'string' ? instruction : undefined,
+    });
+  });
+  return textResult({ data: result.data, url: result.url, usage: result.usage });
+}
+
+/**
+ * Resolve a run_agent `credentials` argument to a name -> value map, reading
+ * "env:VARNAME" values from the server environment. Returns either the
+ * resolved map or an error result to short-circuit the call.
+ */
+function resolveAgentCredentials(
+  credentials: unknown,
+): { credentials: Record<string, string> | undefined } | { error: ToolResult } {
+  if (credentials === undefined) return { credentials: undefined };
+  const resolved: Record<string, string> = {};
+  for (const [credName, credValue] of Object.entries(credentials as Record<string, unknown>)) {
+    if (typeof credValue !== 'string') {
+      return {
+        error: errorResult(new Error(`run_agent: credential "${credName}" must be a string value`)),
+      };
+    }
+    if (credValue.startsWith('env:')) {
+      const envName = credValue.slice('env:'.length);
+      const envValue = process.env[envName];
+      if (envValue === undefined) {
+        return {
+          error: errorResult(
+            new Error(
+              `run_agent: credential "${credName}" references environment variable "${envName}", which is not set on the server`,
+            ),
+          ),
+        };
+      }
+      resolved[credName] = envValue;
+    } else {
+      resolved[credName] = credValue;
+    }
+  }
+  return { credentials: resolved };
+}
+
+async function handleRunAgent(args: unknown): Promise<ToolResult> {
+  const { goal, startUrl, schema, maxSteps, credentials, profile } = (args ?? {}) as {
+    goal?: unknown;
+    startUrl?: unknown;
+    schema?: unknown;
+    maxSteps?: unknown;
+    credentials?: unknown;
+    profile?: unknown;
+  };
+  if (typeof goal !== 'string' || goal.trim().length === 0) {
+    return errorResult(new Error('run_agent: "goal" must be a non-empty string'));
+  }
+  if (!isAbsoluteHttpUrl(startUrl)) {
+    return errorResult(new Error('run_agent: "startUrl" must be an absolute http(s) URL'));
+  }
+  if (schema !== undefined && !isSchemaObject(schema)) {
+    return errorResult(new Error('run_agent: "schema" must be a JSON Schema object'));
+  }
+  if (maxSteps !== undefined && !isPositiveInteger(maxSteps)) {
+    return errorResult(new Error('run_agent: "maxSteps" must be a positive integer'));
+  }
+  if (credentials !== undefined && !isSchemaObject(credentials)) {
+    return errorResult(
+      new Error('run_agent: "credentials" must be an object of name -> value strings'),
+    );
+  }
+
+  // Resolve credentials. "env:VARNAME" values are read from the server's
+  // environment at call time. Resolved values are passed straight to the
+  // agent executor and never appear in prompts, results, or errors.
+  const resolved = resolveAgentCredentials(credentials);
+  if ('error' in resolved) return resolved.error;
+
+  const storageStatePath = resolveProfileArg('run_agent', profile);
+  const zodSchema = schema === undefined ? undefined : jsonSchemaToZod(schema);
+  const result = await runAgent({
+    goal,
+    startUrl,
+    schema: zodSchema,
+    maxSteps: maxSteps as number | undefined,
+    credentials: resolved.credentials,
+    storageStatePath,
+  });
+
+  // Deliberately compact: step records contain page text and would bloat
+  // (and could leak into) the client's context.
+  const payload = {
+    status: result.status,
+    output: result.output,
+    failureReason: result.failureReason,
+    finalUrl: result.finalUrl,
+    stepCount: result.steps.length,
+    usage: result.usage,
+  };
+  return result.status === 'success'
+    ? textResult(payload)
+    : { ...textResult(payload), isError: true };
+}
+
+/**
+ * Execute a prepared saved-query run, persisting its lifecycle
+ * (running -> success/failed) to the store.
+ */
+async function executeSavedQueryRun(
+  store: RunStore,
+  queryName: string,
+  spec: ReturnType<typeof prepareSavedQueryRun> & { schemaJson: Record<string, unknown> },
+): Promise<ToolResult> {
+  // Persist the replay as a run, mirroring the queue's lifecycle:
+  // queued -> running -> success/failed.
+  const record = store.createRun(spec);
+  store.updateRun(record.id, { status: 'running', startedAt: Date.now(), attempts: 1 });
+  try {
+    // Resolved inside the try so a missing profile persists as a
+    // failed run (matching the queue's final no-retry 'failed').
+    let storageStatePath = spec.storageStatePath;
+    if (spec.profile !== undefined) {
+      if (spec.storageStatePath !== undefined) {
+        throw new Error(
+          '`profile` and `storageStatePath` are mutually exclusive — fix the saved spec.',
+        );
+      }
+      storageStatePath = resolveProfileArg('run_saved_query', spec.profile);
+    }
+    const zodSchema = jsonSchemaToZod(spec.schemaJson);
+    const result = await withPage({ storageStatePath }, async (page) => {
+      const snapshot = await navigateOrPdfSnapshot(page, spec.url);
+      return extract({
+        ...(snapshot ? { snapshot } : { page }),
+        schema: zodSchema,
+        instruction: spec.instruction,
+      });
+    });
+    store.updateRun(record.id, {
+      status: 'success',
+      finishedAt: Date.now(),
+      output: result.data,
+      usage: result.usage,
+      finalUrl: result.url,
+    });
+    return textResult({
+      runId: record.id,
+      query: queryName,
+      status: 'success',
+      data: result.data,
+      url: result.url,
+      usage: result.usage,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    store.updateRun(record.id, {
+      status: 'failed',
+      finishedAt: Date.now(),
+      failureReason: message,
+    });
+    return errorResult(new Error(`run_saved_query: run ${record.id} failed — ${message}`));
+  }
+}
+
+async function handleRunSavedQuery(args: unknown): Promise<ToolResult> {
+  const {
+    name: queryName,
+    urlOverride,
+    instructionOverride,
+  } = (args ?? {}) as {
+    name?: unknown;
+    urlOverride?: unknown;
+    instructionOverride?: unknown;
+  };
+  if (typeof queryName !== 'string' || queryName.trim().length === 0) {
+    return errorResult(new Error('run_saved_query: "name" must be a non-empty string'));
+  }
+  if (urlOverride !== undefined && !isAbsoluteHttpUrl(urlOverride)) {
+    return errorResult(new Error('run_saved_query: "urlOverride" must be an absolute http(s) URL'));
+  }
+  if (instructionOverride !== undefined && typeof instructionOverride !== 'string') {
+    return errorResult(new Error('run_saved_query: "instructionOverride" must be a string'));
+  }
+
+  const store = getStore();
+  // Throws with a clear message when no query by that name exists;
+  // bumps the query's runCount/lastRunAt and stamps spec.queryName.
+  const spec = prepareSavedQueryRun(store, queryName, {
+    url: urlOverride,
+    instruction: instructionOverride,
+  });
+  if (!spec.schemaJson) {
+    return errorResult(
+      new Error(`run_saved_query: saved query "${queryName}" has no schema (schemaJson)`),
+    );
+  }
+
+  return executeSavedQueryRun(store, queryName, {
+    ...spec,
+    schemaJson: spec.schemaJson,
+  });
+}
+
+const TOOL_HANDLERS: Record<string, (args: unknown) => Promise<ToolResult>> = {
+  web_outline: handleWebOutline,
+  web_search: handleWebSearch,
+  web_fetch: handleWebFetch,
+  web_extract: handleWebExtract,
+  run_agent: handleRunAgent,
+  run_saved_query: handleRunSavedQuery,
+};
+
 const server = new Server({ name: 'sortie', version: VERSION }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [...TOOLS] }));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
+  const handler = TOOL_HANDLERS[name];
+  if (!handler) {
+    return errorResult(new Error(`Unknown tool: ${name}`));
+  }
   try {
-    switch (name) {
-      case 'web_outline': {
-        const url = String((args as { url?: unknown })?.url ?? '');
-        if (!/^https?:\/\//.test(url)) {
-          return errorResult(new Error('web_outline: "url" must be an absolute http(s) URL'));
-        }
-        const snapshot = await withPage(undefined, async (page) => {
-          await navigateAndSettle(page, url);
-          return distillPage(page);
-        });
-        return textResult({
-          url: snapshot.url,
-          title: snapshot.title,
-          elementCount: snapshot.elements.length,
-          outline: snapshot.outline,
-          text: snapshot.text,
-        });
-      }
-      case 'web_search': {
-        const { query, maxResults } = (args ?? {}) as { query?: unknown; maxResults?: unknown };
-        if (typeof query !== 'string' || query.trim().length === 0) {
-          return errorResult(new Error('web_search: "query" must be a non-empty string'));
-        }
-        if (
-          maxResults !== undefined &&
-          (typeof maxResults !== 'number' || !Number.isInteger(maxResults) || maxResults <= 0)
-        ) {
-          return errorResult(new Error('web_search: "maxResults" must be a positive integer'));
-        }
-        const response = await search(query, { maxResults: maxResults as number | undefined });
-        return textResult(response);
-      }
-      case 'web_fetch': {
-        const { url, maxChars } = (args ?? {}) as { url?: unknown; maxChars?: unknown };
-        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
-          return errorResult(new Error('web_fetch: "url" must be an absolute http(s) URL'));
-        }
-        if (
-          maxChars !== undefined &&
-          (typeof maxChars !== 'number' || !Number.isInteger(maxChars) || maxChars <= 0)
-        ) {
-          return errorResult(new Error('web_fetch: "maxChars" must be a positive integer'));
-        }
-        const result = await fetchPage({ url, maxChars: maxChars as number | undefined });
-        // Markdown only — the plain-text rendering would double the payload.
-        return textResult({
-          url: result.url,
-          finalUrl: result.finalUrl,
-          title: result.title,
-          contentType: result.contentType,
-          truncated: result.truncated,
-          markdown: result.markdown,
-        });
-      }
-      case 'web_extract': {
-        const { url, schema, instruction, profile } = (args ?? {}) as {
-          url?: unknown;
-          schema?: unknown;
-          instruction?: unknown;
-          profile?: unknown;
-        };
-        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
-          return errorResult(new Error('web_extract: "url" must be an absolute http(s) URL'));
-        }
-        if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
-          return errorResult(new Error('web_extract: "schema" must be a JSON Schema object'));
-        }
-        const storageStatePath = resolveProfileArg('web_extract', profile);
-        const zodSchema = jsonSchemaToZod(schema as Record<string, unknown>);
-        // Own the page (instead of letting extract() navigate) so the
-        // profile's storage state can be loaded into the browser context.
-        const result = await withPage({ storageStatePath }, async (page) => {
-          const snapshot = await navigateOrPdfSnapshot(page, url);
-          return extract({
-            ...(snapshot ? { snapshot } : { page }),
-            schema: zodSchema,
-            instruction: typeof instruction === 'string' ? instruction : undefined,
-          });
-        });
-        return textResult({ data: result.data, url: result.url, usage: result.usage });
-      }
-      case 'run_agent': {
-        const { goal, startUrl, schema, maxSteps, credentials, profile } = (args ?? {}) as {
-          goal?: unknown;
-          startUrl?: unknown;
-          schema?: unknown;
-          maxSteps?: unknown;
-          credentials?: unknown;
-          profile?: unknown;
-        };
-        if (typeof goal !== 'string' || goal.trim().length === 0) {
-          return errorResult(new Error('run_agent: "goal" must be a non-empty string'));
-        }
-        if (typeof startUrl !== 'string' || !/^https?:\/\//.test(startUrl)) {
-          return errorResult(new Error('run_agent: "startUrl" must be an absolute http(s) URL'));
-        }
-        if (
-          schema !== undefined &&
-          (typeof schema !== 'object' || schema === null || Array.isArray(schema))
-        ) {
-          return errorResult(new Error('run_agent: "schema" must be a JSON Schema object'));
-        }
-        if (
-          maxSteps !== undefined &&
-          (typeof maxSteps !== 'number' || !Number.isInteger(maxSteps) || maxSteps <= 0)
-        ) {
-          return errorResult(new Error('run_agent: "maxSteps" must be a positive integer'));
-        }
-        if (
-          credentials !== undefined &&
-          (typeof credentials !== 'object' || credentials === null || Array.isArray(credentials))
-        ) {
-          return errorResult(
-            new Error('run_agent: "credentials" must be an object of name -> value strings'),
-          );
-        }
-
-        // Resolve credentials. "env:VARNAME" values are read from the server's
-        // environment at call time. Resolved values are passed straight to the
-        // agent executor and never appear in prompts, results, or errors.
-        let resolvedCredentials: Record<string, string> | undefined;
-        if (credentials !== undefined) {
-          resolvedCredentials = {};
-          for (const [credName, credValue] of Object.entries(
-            credentials as Record<string, unknown>,
-          )) {
-            if (typeof credValue !== 'string') {
-              return errorResult(
-                new Error(`run_agent: credential "${credName}" must be a string value`),
-              );
-            }
-            if (credValue.startsWith('env:')) {
-              const envName = credValue.slice('env:'.length);
-              const envValue = process.env[envName];
-              if (envValue === undefined) {
-                return errorResult(
-                  new Error(
-                    `run_agent: credential "${credName}" references environment variable "${envName}", which is not set on the server`,
-                  ),
-                );
-              }
-              resolvedCredentials[credName] = envValue;
-            } else {
-              resolvedCredentials[credName] = credValue;
-            }
-          }
-        }
-
-        const storageStatePath = resolveProfileArg('run_agent', profile);
-        const zodSchema =
-          schema !== undefined ? jsonSchemaToZod(schema as Record<string, unknown>) : undefined;
-        const result = await runAgent({
-          goal,
-          startUrl,
-          schema: zodSchema,
-          maxSteps: maxSteps as number | undefined,
-          credentials: resolvedCredentials,
-          storageStatePath,
-        });
-
-        // Deliberately compact: step records contain page text and would bloat
-        // (and could leak into) the client's context.
-        const payload = {
-          status: result.status,
-          output: result.output,
-          failureReason: result.failureReason,
-          finalUrl: result.finalUrl,
-          stepCount: result.steps.length,
-          usage: result.usage,
-        };
-        return result.status === 'success'
-          ? textResult(payload)
-          : { ...textResult(payload), isError: true };
-      }
-      case 'run_saved_query': {
-        const {
-          name: queryName,
-          urlOverride,
-          instructionOverride,
-        } = (args ?? {}) as {
-          name?: unknown;
-          urlOverride?: unknown;
-          instructionOverride?: unknown;
-        };
-        if (typeof queryName !== 'string' || queryName.trim().length === 0) {
-          return errorResult(new Error('run_saved_query: "name" must be a non-empty string'));
-        }
-        if (
-          urlOverride !== undefined &&
-          (typeof urlOverride !== 'string' || !/^https?:\/\//.test(urlOverride))
-        ) {
-          return errorResult(
-            new Error('run_saved_query: "urlOverride" must be an absolute http(s) URL'),
-          );
-        }
-        if (instructionOverride !== undefined && typeof instructionOverride !== 'string') {
-          return errorResult(new Error('run_saved_query: "instructionOverride" must be a string'));
-        }
-
-        const store = getStore();
-        // Throws with a clear message when no query by that name exists;
-        // bumps the query's runCount/lastRunAt and stamps spec.queryName.
-        const spec = prepareSavedQueryRun(store, queryName, {
-          url: urlOverride,
-          instruction: instructionOverride,
-        });
-        if (!spec.schemaJson) {
-          return errorResult(
-            new Error(`run_saved_query: saved query "${queryName}" has no schema (schemaJson)`),
-          );
-        }
-
-        // Persist the replay as a run, mirroring the queue's lifecycle:
-        // queued -> running -> success/failed.
-        const record = store.createRun(spec);
-        store.updateRun(record.id, { status: 'running', startedAt: Date.now(), attempts: 1 });
-        try {
-          // Resolved inside the try so a missing profile persists as a
-          // failed run (matching the queue's final no-retry 'failed').
-          let storageStatePath = spec.storageStatePath;
-          if (spec.profile !== undefined) {
-            if (spec.storageStatePath !== undefined) {
-              throw new Error(
-                '`profile` and `storageStatePath` are mutually exclusive — fix the saved spec.',
-              );
-            }
-            storageStatePath = resolveProfileArg('run_saved_query', spec.profile);
-          }
-          const zodSchema = jsonSchemaToZod(spec.schemaJson);
-          const result = await withPage({ storageStatePath }, async (page) => {
-            const snapshot = await navigateOrPdfSnapshot(page, spec.url);
-            return extract({
-              ...(snapshot ? { snapshot } : { page }),
-              schema: zodSchema,
-              instruction: spec.instruction,
-            });
-          });
-          store.updateRun(record.id, {
-            status: 'success',
-            finishedAt: Date.now(),
-            output: result.data,
-            usage: result.usage,
-            finalUrl: result.url,
-          });
-          return textResult({
-            runId: record.id,
-            query: queryName,
-            status: 'success',
-            data: result.data,
-            url: result.url,
-            usage: result.usage,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          store.updateRun(record.id, {
-            status: 'failed',
-            finishedAt: Date.now(),
-            failureReason: message,
-          });
-          return errorResult(new Error(`run_saved_query: run ${record.id} failed — ${message}`));
-        }
-      }
-      default:
-        return errorResult(new Error(`Unknown tool: ${name}`));
-    }
+    return await handler(args);
   } catch (err) {
     return errorResult(err);
   }

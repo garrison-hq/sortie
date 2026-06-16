@@ -64,7 +64,7 @@ function convertSingleType(js: Record<string, unknown>, type: string): z.ZodType
     case 'object':
       return convertObject(js);
     case 'array':
-      return z.array(js['items'] !== undefined ? convertNode(js['items']) : z.unknown());
+      return z.array(js['items'] === undefined ? z.unknown() : convertNode(js['items']));
     case 'string': {
       if (Array.isArray(js['enum'])) {
         const asEnum = convertEnum(js['enum']);

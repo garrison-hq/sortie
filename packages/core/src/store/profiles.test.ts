@@ -71,7 +71,7 @@ describe('login profiles (store)', () => {
     });
 
     it('throws on path-traversal names instead of building a path', () => {
-      for (const name of ['../evil', 'a/b', 'a\\b', '.hidden', 'UPPER']) {
+      for (const name of ['../evil', 'a/b', String.raw`a\b`, '.hidden', 'UPPER']) {
         expect(() => store.profileStatePath(name), name).toThrow(/invalid profile name/);
       }
     });

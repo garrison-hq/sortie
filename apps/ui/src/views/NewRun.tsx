@@ -76,6 +76,84 @@ function parseSchemaText(text: string): SchemaState {
   return { kind: 'valid', value: parsed as Record<string, unknown> };
 }
 
+function renderSchemaIndicator(schemaState: SchemaState, kind: RunKind) {
+  if (schemaState.kind === 'valid') {
+    return <span className="json-indicator valid">✓ valid JSON</span>;
+  }
+  if (schemaState.kind === 'invalid') {
+    return <span className="json-indicator invalid">✗ {schemaState.error}</span>;
+  }
+  if (kind === 'extract') {
+    return <span className="json-indicator invalid">required for extract</span>;
+  }
+  return <span className="json-indicator empty">empty — agent output will be free-form</span>;
+}
+
+interface KindFieldProps {
+  kind: RunKind;
+  instruction: string;
+  onInstructionChange: (value: string) => void;
+  goal: string;
+  onGoalChange: (value: string) => void;
+  maxCharsText: string;
+  onMaxCharsChange: (value: string) => void;
+}
+
+/** The kind-specific primary input: extract → instruction, agent → goal,
+ * fetch → max characters. */
+function KindField({
+  kind,
+  instruction,
+  onInstructionChange,
+  goal,
+  onGoalChange,
+  maxCharsText,
+  onMaxCharsChange,
+}: Readonly<KindFieldProps>) {
+  if (kind === 'extract') {
+    return (
+      <label className="field">
+        <span className="field-label">
+          Instruction <span className="hint">optional hint about what to extract</span>
+        </span>
+        <input
+          type="text"
+          value={instruction}
+          onChange={(e) => onInstructionChange(e.target.value)}
+          placeholder="the list of books on the page"
+        />
+      </label>
+    );
+  }
+  if (kind === 'agent') {
+    return (
+      <label className="field">
+        <span className="field-label">Goal</span>
+        <textarea
+          value={goal}
+          onChange={(e) => onGoalChange(e.target.value)}
+          placeholder="log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total"
+        />
+      </label>
+    );
+  }
+  return (
+    <label className="field">
+      <span className="field-label">
+        Max characters <span className="hint">optional cap on the returned markdown</span>
+      </span>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={maxCharsText}
+        onChange={(e) => onMaxCharsChange(e.target.value)}
+        placeholder="40000"
+      />
+    </label>
+  );
+}
+
 export function NewRun() {
   const [kind, setKind] = useState<RunKind>('extract');
   const [url, setUrl] = useState('');
@@ -106,15 +184,18 @@ export function NewRun() {
   const maxChars = Number(maxCharsText);
   const maxCharsValid = maxCharsText.trim() === '' || (Number.isInteger(maxChars) && maxChars > 0);
 
-  const canSubmit =
-    !submitting &&
-    url.trim() !== '' &&
-    schemaState.kind !== 'invalid' &&
-    (kind === 'extract'
-      ? schemaState.kind === 'valid' // extract requires an output schema
-      : kind === 'agent'
-        ? goal.trim() !== '' && maxStepsValid
-        : maxCharsValid); // fetch only needs a URL (and a sane optional cap)
+  // Per-kind validity: extract requires an output schema, agent needs a goal
+  // and a sane step cap, fetch only needs a URL (with a sane optional cap).
+  let kindValid: boolean;
+  if (kind === 'extract') {
+    kindValid = schemaState.kind === 'valid';
+  } else if (kind === 'agent') {
+    kindValid = goal.trim() !== '' && maxStepsValid;
+  } else {
+    kindValid = maxCharsValid;
+  }
+
+  const canSubmit = !submitting && url.trim() !== '' && schemaState.kind !== 'invalid' && kindValid;
 
   function applyPreset(preset: Preset): void {
     setKind(preset.kind);
@@ -156,7 +237,7 @@ export function NewRun() {
     setError(null);
     try {
       const record = await createRun(buildSpec());
-      window.location.hash = `#/runs/${record.id}`;
+      globalThis.location.hash = `#/runs/${record.id}`;
     } catch (err) {
       setError(messageOf(err));
       setSubmitting(false);
@@ -164,7 +245,7 @@ export function NewRun() {
   }
 
   async function saveAsQuery(): Promise<void> {
-    const name = window.prompt(
+    const name = globalThis.prompt(
       'Query name (lowercase letters, digits, "-" and "_"):',
       savedQueryName ?? '',
     );
@@ -182,16 +263,7 @@ export function NewRun() {
     }
   }
 
-  const schemaIndicator =
-    schemaState.kind === 'valid' ? (
-      <span className="json-indicator valid">✓ valid JSON</span>
-    ) : schemaState.kind === 'invalid' ? (
-      <span className="json-indicator invalid">✗ {schemaState.error}</span>
-    ) : kind === 'extract' ? (
-      <span className="json-indicator invalid">required for extract</span>
-    ) : (
-      <span className="json-indicator empty">empty — agent output will be free-form</span>
-    );
+  const schemaIndicator = renderSchemaIndicator(schemaState, kind);
 
   // Save-as-query needs the same validity as submitting an extract run.
   const canSaveQuery = kind === 'extract' && url.trim() !== '' && schemaState.kind === 'valid';
@@ -239,42 +311,15 @@ export function NewRun() {
           />
         </label>
 
-        {kind === 'extract' ? (
-          <label className="field">
-            <span className="field-label">
-              Instruction <span className="hint">optional hint about what to extract</span>
-            </span>
-            <input
-              type="text"
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder="the list of books on the page"
-            />
-          </label>
-        ) : kind === 'agent' ? (
-          <label className="field">
-            <span className="field-label">Goal</span>
-            <textarea
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="log in as standard_user with password {{cred:SAUCE_PASSWORD}}, add the backpack to the cart, and report the cart total"
-            />
-          </label>
-        ) : (
-          <label className="field">
-            <span className="field-label">
-              Max characters <span className="hint">optional cap on the returned markdown</span>
-            </span>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={maxCharsText}
-              onChange={(e) => setMaxCharsText(e.target.value)}
-              placeholder="40000"
-            />
-          </label>
-        )}
+        <KindField
+          kind={kind}
+          instruction={instruction}
+          onInstructionChange={setInstruction}
+          goal={goal}
+          onGoalChange={setGoal}
+          maxCharsText={maxCharsText}
+          onMaxCharsChange={setMaxCharsText}
+        />
 
         {kind !== 'fetch' && (
           <label className="field">
@@ -346,7 +391,7 @@ export function NewRun() {
             {profiles.map((p) => (
               <option key={p.name} value={p.name}>
                 {p.name}
-                {p.domainHint !== undefined ? ` — ${p.domainHint}` : ''}
+                {p.domainHint === undefined ? '' : ` — ${p.domainHint}`}
               </option>
             ))}
           </select>

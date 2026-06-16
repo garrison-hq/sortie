@@ -8,7 +8,7 @@ const OBSERVATION_PREVIEW_CHARS = 200;
 export function StepItem({ step }: { step: StepRecord }) {
   const input = truncate(JSON.stringify(step.action.input), INPUT_PREVIEW_CHARS);
   const observation = truncate(
-    step.observation.replace(/\s+/g, ' ').trim(),
+    step.observation.replaceAll(/\s+/g, ' ').trim(),
     OBSERVATION_PREVIEW_CHARS,
   );
   return (

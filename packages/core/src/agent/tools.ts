@@ -273,198 +273,237 @@ async function dispatch(
   input: Record<string, unknown>,
 ): Promise<string> {
   switch (tool) {
-    case 'navigate': {
-      const parsed = navigateInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const { url } = parsed.data;
-      if (!isAbsoluteHttpUrl(url)) {
-        return `Error: navigate requires an absolute http(s) URL including the protocol; got "${url}"`;
-      }
-      try {
-        await navigateAndSettle(ctx.page, url);
-      } catch (err) {
-        // Headless Chromium aborts PDF navigations (net::ERR_ABORTED) —
-        // sniff the headers and surface the PDF's content instead of an error.
-        if (isAbortedNavigation(err) && (await sniffPdfResponse(ctx.page.context().request, url))) {
-          return await pdfObservation(ctx.page, url);
-        }
-        throw err;
-      }
-      return `Navigated to ${ctx.page.url()}`;
-    }
-
-    case 'click': {
-      const parsed = clickInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const located = await locatorForRef(ctx.page, parsed.data.ref);
-      if (typeof located === 'string') return located;
-      // Describe before clicking — the click may navigate away.
-      const desc = await describeLocator(located);
-      await located.click({ timeout: ACTION_TIMEOUT_MS });
-      await ctx.page
-        .waitForLoadState('domcontentloaded', { timeout: ACTION_TIMEOUT_MS })
-        .catch(() => {});
-      return `Clicked [${parsed.data.ref}] ${desc}`;
-    }
-
-    case 'type': {
-      const parsed = typeInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const { ref, text, submit } = parsed.data;
-      const located = await locatorForRef(ctx.page, ref);
-      if (typeof located === 'string') return located;
-
-      const missing: string[] = [];
-      const resolved = text.replace(CRED_PLACEHOLDER_RE, (match, name: string) => {
-        const value = ctx.credentials[name];
-        if (value === undefined) {
-          missing.push(name);
-          return match;
-        }
-        return value;
-      });
-      if (missing.length > 0) {
-        const available = Object.keys(ctx.credentials).sort();
-        return (
-          `Error: unknown credential name(s): ${missing.join(', ')}. ` +
-          `Available credential names: ${available.length > 0 ? available.join(', ') : '(none)'}`
-        );
-      }
-
-      const desc = await describeLocator(located);
-      await located.fill(resolved, { timeout: ACTION_TIMEOUT_MS });
-      if (submit) {
-        await located.press('Enter', { timeout: ACTION_TIMEOUT_MS });
-        await ctx.page
-          .waitForLoadState('domcontentloaded', { timeout: ACTION_TIMEOUT_MS })
-          .catch(() => {});
-      }
-      // CRITICAL: echo the placeholder form of the text, never the resolved value.
-      return `Typed "${clip(text, 100)}" into [${ref}] ${desc}${submit ? ' and pressed Enter' : ''}`;
-    }
-
-    case 'select': {
-      const parsed = selectInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const { ref, value } = parsed.data;
-      const located = await locatorForRef(ctx.page, ref);
-      if (typeof located === 'string') return located;
-      const desc = await describeLocator(located);
-      try {
-        await located.selectOption({ value }, { timeout: ACTION_TIMEOUT_MS });
-      } catch {
-        await located.selectOption({ label: value }, { timeout: ACTION_TIMEOUT_MS });
-      }
-      return `Selected "${value}" in [${ref}] ${desc}`;
-    }
-
-    case 'scroll': {
-      const parsed = scrollInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const pages = parsed.data.pages ?? 1;
-      const sign = parsed.data.direction === 'up' ? -1 : 1;
-      await ctx.page.evaluate(
-        (args: { deltaPages: number }) => {
-          const win = globalThis as unknown as {
-            innerHeight: number;
-            scrollBy(x: number, y: number): void;
-          };
-          win.scrollBy(0, win.innerHeight * args.deltaPages);
-        },
-        { deltaPages: sign * pages },
-      );
-      return `Scrolled ${parsed.data.direction} ${pages} viewport page${pages === 1 ? '' : 's'}`;
-    }
-
-    case 'wait': {
-      const parsed = waitInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const { seconds, forText } = parsed.data;
-      if (forText !== undefined && forText.length > 0) {
-        await ctx.page.getByText(forText).first().waitFor({ timeout: WAIT_FOR_TEXT_TIMEOUT_MS });
-        return `Text "${forText}" appeared on the page`;
-      }
-      const s = Math.min(Math.max(seconds ?? 1, 0), MAX_WAIT_SECONDS);
-      await ctx.page.waitForTimeout(s * 1000);
-      return `Waited ${s}s`;
-    }
-
-    case 'extract': {
-      const parsed = extractInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const result = await extract({
-        page: ctx.page,
-        schema: z.record(z.string(), z.unknown()),
-        instruction: parsed.data.instruction,
-        provider: ctx.provider,
-      });
-      let json = JSON.stringify(result.data);
-      if (json.length > EXTRACT_OBSERVATION_MAX) {
-        json = json.slice(0, EXTRACT_OBSERVATION_MAX) + TRUNCATION_MARKER;
-      }
-      return `Extracted: ${json}`;
-    }
-
-    case 'search': {
-      const parsed = searchInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const { query } = parsed.data;
-      const maxResults = parsed.data.maxResults ?? SEARCH_DEFAULT_RESULTS;
-      // Browser-engine searches run in a TEMPORARY page so the agent's page
-      // (and the refs in its latest snapshot) is never navigated away.
-      const tempPage = await ctx.page.context().newPage();
-      try {
-        const response = await search(query, {
-          maxResults,
-          page: tempPage,
-          provider: ctx.provider,
-        });
-        if (response.results.length === 0) {
-          return `Search for "${query}" returned no results. Try a different query.`;
-        }
-        const lines = response.results.map((r) => {
-          const snippet = r.snippet ? `\n   ${clip(r.snippet, SEARCH_SNIPPET_MAX)}` : '';
-          return `${r.position}. ${r.title} — ${r.url}${snippet}`;
-        });
-        return clip(`Search results for "${query}":\n${lines.join('\n')}`, SEARCH_OBSERVATION_MAX);
-      } finally {
-        await tempPage.close().catch(() => {});
-      }
-    }
-
-    case 'read_page': {
-      const parsed = readPageInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      const maxChars = parsed.data.maxChars ?? READ_PAGE_DEFAULT_CHARS;
-      // Pure DOM -> Markdown conversion on the live page's content: no
-      // navigation, no LLM call.
-      const url = ctx.page.url();
-      const html = await ctx.page.content();
-      const contentHtml = extractArticle(html, url)?.contentHtml ?? stripBoilerplate(html, url);
-      const markdown = htmlToMarkdown(contentHtml);
-      return `Page content as Markdown:\n${clip(markdown, maxChars)}`;
-    }
-
+    case 'navigate':
+      return doNavigate(ctx, input);
+    case 'click':
+      return doClick(ctx, input);
+    case 'type':
+      return doType(ctx, input);
+    case 'select':
+      return doSelect(ctx, input);
+    case 'scroll':
+      return doScroll(ctx, input);
+    case 'wait':
+      return doWait(ctx, input);
+    case 'extract':
+      return doExtract(ctx, input);
+    case 'search':
+      return doSearch(ctx, input);
+    case 'read_page':
+      return doReadPage(ctx, input);
     // Termination semantics (validating the result, ending the run) belong to
     // the agent loop; the executor just acknowledges.
-    case 'done': {
-      const parsed = doneInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      return 'Final result received; goal marked complete.';
-    }
-
-    case 'fail': {
-      const parsed = failInput.safeParse(input);
-      if (!parsed.success) return invalidInput(tool, parsed.error);
-      return `Failure recorded: ${clip(parsed.data.reason, 300)}`;
-    }
-
+    case 'done':
+      return doDone(input);
+    case 'fail':
+      return doFail(input);
     default:
       return (
         `Error: unknown tool "${tool}". Available tools: ` +
         AGENT_TOOLS.map((t) => t.name).join(', ')
       );
   }
+}
+
+async function doNavigate(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = navigateInput.safeParse(input);
+  if (!parsed.success) return invalidInput('navigate', parsed.error);
+  const { url } = parsed.data;
+  if (!isAbsoluteHttpUrl(url)) {
+    return `Error: navigate requires an absolute http(s) URL including the protocol; got "${url}"`;
+  }
+  try {
+    await navigateAndSettle(ctx.page, url);
+  } catch (err) {
+    // Headless Chromium aborts PDF navigations (net::ERR_ABORTED) —
+    // sniff the headers and surface the PDF's content instead of an error.
+    if (isAbortedNavigation(err) && (await sniffPdfResponse(ctx.page.context().request, url))) {
+      return await pdfObservation(ctx.page, url);
+    }
+    throw err;
+  }
+  return `Navigated to ${ctx.page.url()}`;
+}
+
+async function doClick(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = clickInput.safeParse(input);
+  if (!parsed.success) return invalidInput('click', parsed.error);
+  const located = await locatorForRef(ctx.page, parsed.data.ref);
+  if (typeof located === 'string') return located;
+  // Describe before clicking — the click may navigate away.
+  const desc = await describeLocator(located);
+  await located.click({ timeout: ACTION_TIMEOUT_MS });
+  await ctx.page
+    .waitForLoadState('domcontentloaded', { timeout: ACTION_TIMEOUT_MS })
+    .catch(() => {});
+  return `Clicked [${parsed.data.ref}] ${desc}`;
+}
+
+async function doType(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = typeInput.safeParse(input);
+  if (!parsed.success) return invalidInput('type', parsed.error);
+  const { ref, text, submit } = parsed.data;
+  const located = await locatorForRef(ctx.page, ref);
+  if (typeof located === 'string') return located;
+
+  const resolved = resolveCredentials(text, ctx.credentials);
+  if ('missing' in resolved) {
+    return unknownCredentialsError(resolved.missing, ctx.credentials);
+  }
+
+  const desc = await describeLocator(located);
+  await located.fill(resolved.value, { timeout: ACTION_TIMEOUT_MS });
+  if (submit) {
+    await located.press('Enter', { timeout: ACTION_TIMEOUT_MS });
+    await ctx.page
+      .waitForLoadState('domcontentloaded', { timeout: ACTION_TIMEOUT_MS })
+      .catch(() => {});
+  }
+  // CRITICAL: echo the placeholder form of the text, never the resolved value.
+  return `Typed "${clip(text, 100)}" into [${ref}] ${desc}${submit ? ' and pressed Enter' : ''}`;
+}
+
+async function doSelect(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = selectInput.safeParse(input);
+  if (!parsed.success) return invalidInput('select', parsed.error);
+  const { ref, value } = parsed.data;
+  const located = await locatorForRef(ctx.page, ref);
+  if (typeof located === 'string') return located;
+  const desc = await describeLocator(located);
+  try {
+    await located.selectOption({ value }, { timeout: ACTION_TIMEOUT_MS });
+  } catch {
+    await located.selectOption({ label: value }, { timeout: ACTION_TIMEOUT_MS });
+  }
+  return `Selected "${value}" in [${ref}] ${desc}`;
+}
+
+async function doScroll(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = scrollInput.safeParse(input);
+  if (!parsed.success) return invalidInput('scroll', parsed.error);
+  const pages = parsed.data.pages ?? 1;
+  const sign = parsed.data.direction === 'up' ? -1 : 1;
+  await ctx.page.evaluate(
+    (args: { deltaPages: number }) => {
+      const win = globalThis as unknown as {
+        innerHeight: number;
+        scrollBy(x: number, y: number): void;
+      };
+      win.scrollBy(0, win.innerHeight * args.deltaPages);
+    },
+    { deltaPages: sign * pages },
+  );
+  return `Scrolled ${parsed.data.direction} ${pages} viewport page${pages === 1 ? '' : 's'}`;
+}
+
+async function doWait(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = waitInput.safeParse(input);
+  if (!parsed.success) return invalidInput('wait', parsed.error);
+  const { seconds, forText } = parsed.data;
+  if (forText !== undefined && forText.length > 0) {
+    await ctx.page.getByText(forText).first().waitFor({ timeout: WAIT_FOR_TEXT_TIMEOUT_MS });
+    return `Text "${forText}" appeared on the page`;
+  }
+  const s = Math.min(Math.max(seconds ?? 1, 0), MAX_WAIT_SECONDS);
+  await ctx.page.waitForTimeout(s * 1000);
+  return `Waited ${s}s`;
+}
+
+async function doExtract(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = extractInput.safeParse(input);
+  if (!parsed.success) return invalidInput('extract', parsed.error);
+  const result = await extract({
+    page: ctx.page,
+    schema: z.record(z.string(), z.unknown()),
+    instruction: parsed.data.instruction,
+    provider: ctx.provider,
+  });
+  let json = JSON.stringify(result.data);
+  if (json.length > EXTRACT_OBSERVATION_MAX) {
+    json = json.slice(0, EXTRACT_OBSERVATION_MAX) + TRUNCATION_MARKER;
+  }
+  return `Extracted: ${json}`;
+}
+
+async function doSearch(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = searchInput.safeParse(input);
+  if (!parsed.success) return invalidInput('search', parsed.error);
+  const { query } = parsed.data;
+  const maxResults = parsed.data.maxResults ?? SEARCH_DEFAULT_RESULTS;
+  // Browser-engine searches run in a TEMPORARY page so the agent's page
+  // (and the refs in its latest snapshot) is never navigated away.
+  const tempPage = await ctx.page.context().newPage();
+  try {
+    const response = await search(query, {
+      maxResults,
+      page: tempPage,
+      provider: ctx.provider,
+    });
+    if (response.results.length === 0) {
+      return `Search for "${query}" returned no results. Try a different query.`;
+    }
+    const lines = response.results.map((r) => {
+      const snippet = r.snippet ? `\n   ${clip(r.snippet, SEARCH_SNIPPET_MAX)}` : '';
+      return `${r.position}. ${r.title} — ${r.url}${snippet}`;
+    });
+    return clip(`Search results for "${query}":\n${lines.join('\n')}`, SEARCH_OBSERVATION_MAX);
+  } finally {
+    await tempPage.close().catch(() => {});
+  }
+}
+
+async function doReadPage(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
+  const parsed = readPageInput.safeParse(input);
+  if (!parsed.success) return invalidInput('read_page', parsed.error);
+  const maxChars = parsed.data.maxChars ?? READ_PAGE_DEFAULT_CHARS;
+  // Pure DOM -> Markdown conversion on the live page's content: no
+  // navigation, no LLM call.
+  const url = ctx.page.url();
+  const html = await ctx.page.content();
+  const contentHtml = extractArticle(html, url)?.contentHtml ?? stripBoilerplate(html, url);
+  const markdown = htmlToMarkdown(contentHtml);
+  return `Page content as Markdown:\n${clip(markdown, maxChars)}`;
+}
+
+function doDone(input: Record<string, unknown>): string {
+  const parsed = doneInput.safeParse(input);
+  if (!parsed.success) return invalidInput('done', parsed.error);
+  return 'Final result received; goal marked complete.';
+}
+
+function doFail(input: Record<string, unknown>): string {
+  const parsed = failInput.safeParse(input);
+  if (!parsed.success) return invalidInput('fail', parsed.error);
+  return `Failure recorded: ${clip(parsed.data.reason, 300)}`;
+}
+
+/**
+ * Substitute `{{cred:NAME}}` placeholders in `text` with real credential values.
+ * Returns `{ value }` on success, or `{ missing }` listing unknown credential
+ * names (the substitution is aborted so no partial secret leaks).
+ */
+function resolveCredentials(
+  text: string,
+  credentials: Record<string, string>,
+): { value: string } | { missing: string[] } {
+  const missing: string[] = [];
+  const value = text.replaceAll(CRED_PLACEHOLDER_RE, (match, name: string) => {
+    const cred = credentials[name];
+    if (cred === undefined) {
+      missing.push(name);
+      return match;
+    }
+    return cred;
+  });
+  return missing.length > 0 ? { missing } : { value };
+}
+
+function unknownCredentialsError(missing: string[], credentials: Record<string, string>): string {
+  const available = Object.keys(credentials).sort((a, b) => a.localeCompare(b));
+  return (
+    `Error: unknown credential name(s): ${missing.join(', ')}. ` +
+    `Available credential names: ${available.length > 0 ? available.join(', ') : '(none)'}`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -498,23 +537,29 @@ async function describeLocator(locator: Locator): Promise<string> {
         getAttribute(name: string): string | null;
         innerText?: string;
       };
+
+      const inputRole = (type: string): string => {
+        if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image') {
+          return 'button';
+        }
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        return 'textbox';
+      };
+
+      const implicitRole = (tag: string): string => {
+        if (tag === 'a') return 'link';
+        if (tag === 'button') return 'button';
+        if (tag === 'select') return 'combobox';
+        if (tag === 'textarea') return 'textbox';
+        if (tag === 'input') return inputRole((el.getAttribute('type') ?? 'text').toLowerCase());
+        return tag;
+      };
+
       const tag = el.tagName.toLowerCase();
-      let role = el.getAttribute('role') ?? '';
-      if (!role) {
-        if (tag === 'a') role = 'link';
-        else if (tag === 'button') role = 'button';
-        else if (tag === 'select') role = 'combobox';
-        else if (tag === 'textarea') role = 'textbox';
-        else if (tag === 'input') {
-          const type = (el.getAttribute('type') ?? 'text').toLowerCase();
-          if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image') {
-            role = 'button';
-          } else if (type === 'checkbox') role = 'checkbox';
-          else if (type === 'radio') role = 'radio';
-          else role = 'textbox';
-        } else role = tag;
-      }
-      const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+      const role = el.getAttribute('role') || implicitRole(tag);
+
+      const collapse = (s: string): string => s.replaceAll(/\s+/g, ' ').trim();
       const name =
         collapse(el.getAttribute('aria-label') ?? '') ||
         collapse(typeof el.innerText === 'string' ? el.innerText : '') ||
@@ -572,7 +617,7 @@ function errorMessage(err: unknown): string {
   let message = err instanceof Error ? err.message : String(err);
   const callLog = message.indexOf('Call log:');
   if (callLog !== -1) message = message.slice(0, callLog);
-  message = message.replace(/\s+/g, ' ').trim();
+  message = message.replaceAll(/\s+/g, ' ').trim();
   if (message.length > ERROR_MESSAGE_MAX) {
     message = message.slice(0, ERROR_MESSAGE_MAX) + TRUNCATION_MARKER;
   }

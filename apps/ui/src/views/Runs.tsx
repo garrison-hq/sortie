@@ -77,9 +77,8 @@ export function Runs() {
           </button>
         ))}
       </div>
-      {runs === null ? (
-        <div className="loading">Loading runs…</div>
-      ) : visible.length === 0 ? (
+      {runs === null && <div className="loading">Loading runs…</div>}
+      {runs !== null && visible.length === 0 && (
         <div className="empty-state">
           {filter === 'all' ? (
             <>
@@ -89,7 +88,8 @@ export function Runs() {
             `No ${filter} runs.`
           )}
         </div>
-      ) : (
+      )}
+      {runs !== null && visible.length > 0 && (
         <table className="runs-table">
           <thead>
             <tr>
@@ -106,7 +106,7 @@ export function Runs() {
               <tr
                 key={run.id}
                 onClick={() => {
-                  window.location.hash = `#/runs/${run.id}`;
+                  globalThis.location.hash = `#/runs/${run.id}`;
                 }}
               >
                 <td className="mono">{shortId(run.id)}</td>
@@ -119,7 +119,7 @@ export function Runs() {
                 </td>
                 <td className="cell-dim">{relativeTime(run.createdAt, now)}</td>
                 <td className="cell-dim">
-                  {run.finishedAt !== undefined ? relativeTime(run.finishedAt, now) : '—'}
+                  {run.finishedAt === undefined ? '—' : relativeTime(run.finishedAt, now)}
                 </td>
               </tr>
             ))}

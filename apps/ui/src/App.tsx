@@ -25,11 +25,11 @@ function parseHash(hash: string): Route {
 }
 
 function useHashRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
+  const [route, setRoute] = useState<Route>(() => parseHash(globalThis.location.hash));
   useEffect(() => {
-    const onHashChange = (): void => setRoute(parseHash(window.location.hash));
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    const onHashChange = (): void => setRoute(parseHash(globalThis.location.hash));
+    globalThis.addEventListener('hashchange', onHashChange);
+    return () => globalThis.removeEventListener('hashchange', onHashChange);
   }, []);
   return route;
 }

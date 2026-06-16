@@ -408,7 +408,7 @@ describe('createRunQueue', () => {
       kind: 'fetch',
       url: 'https://x.test/',
       profile: 'sauce',
-      storageStatePath: '/tmp/state.json',
+      storageStatePath: 'state.json',
     });
     await queue.drain();
 

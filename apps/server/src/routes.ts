@@ -172,7 +172,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     }
     const body = store.exportRuns({
       format: format as 'json' | 'csv',
-      ...(batchId !== undefined ? { batchId } : {}),
+      ...(batchId === undefined ? {} : { batchId }),
     });
     return reply
       .type(format === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8')
@@ -291,7 +291,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       } catch (err) {
         stateError = errorMessage(err);
       }
-      return { ...profile, ...(state !== undefined ? { state } : { stateError }) };
+      return { ...profile, ...(state === undefined ? { stateError } : { state }) };
     }),
   }));
 

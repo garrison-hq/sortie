@@ -8,7 +8,10 @@ import { FETCH_MAX_CHARS, fetchPage } from './index.js';
 // ---------------------------------------------------------------------------
 
 function escapePdfString(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('(', String.raw`\(`)
+    .replaceAll(')', String.raw`\)`);
 }
 
 function buildFixturePdf(opts: { title?: string; pageTexts: string[] }): Uint8Array {
@@ -53,9 +56,10 @@ function buildFixturePdf(opts: { title?: string; pageTexts: string[] }): Uint8Ar
   const xref =
     `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
     offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('');
+  const infoEntry = infoRef === undefined ? '' : ` /Info ${infoRef} 0 R`;
   const trailer =
     `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R` +
-    `${infoRef !== undefined ? ` /Info ${infoRef} 0 R` : ''} >>\nstartxref\n${offset}\n%%EOF\n`;
+    `${infoEntry} >>\nstartxref\n${offset}\n%%EOF\n`;
 
   return new TextEncoder().encode(header + objects.join('') + xref + trailer);
 }
