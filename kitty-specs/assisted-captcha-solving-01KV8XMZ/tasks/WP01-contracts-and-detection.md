@@ -21,7 +21,8 @@ subtasks:
 - T004
 - T005
 - T006
-shell_pid: '176215'
+shell_pid: "176215"
+agent: "claude:sonnet:implementer:implementer"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/challenge/
@@ -138,3 +139,7 @@ null>` that reads status/title/body/iframe srcs and calls the pure function.
 - Confirm contract additions are purely additive.
 - Confirm `engines.ts` behavior is preserved (diff the detection outcomes).
 - Confirm detector has no side effects / no challenge-answering.
+
+## Activity Log
+
+- 2026-06-16T20:00:07Z – claude:sonnet:implementer:implementer – shell_pid=176215 – Assigned agent via action command
