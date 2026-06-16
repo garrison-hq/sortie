@@ -19,8 +19,8 @@ subtasks:
 - T034
 - T035
 - T036
-agent: "claude:sonnet:implementer:implementer"
-shell_pid: "388326"
+agent: "claude:opus:reviewer:reviewer"
+shell_pid: "412835"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: apps/ui/e2e/
@@ -126,3 +126,4 @@ Run `spec-kitty agent action implement WP07 --agent <name>` (after WP03–WP06).
 
 - 2026-06-16T22:09:58Z – claude:sonnet:implementer:implementer – shell_pid=388326 – Started implementation via action command
 - 2026-06-16T22:23:06Z – claude:sonnet:implementer:implementer – shell_pid=388326 – Ready for review: CLI --assist/--assist-timeout with warn+fallback; MCP assist schema+warning; fake-challenge fixture; Playwright e2e covering detect→pause→frame→click→resume, non-blocking, timeout→captcha_unsolved, assist-OFF regression. Zero LLM calls needed in e2e. typecheck+test+lint all green.
+- 2026-06-16T22:23:55Z – claude:opus:reviewer:reviewer – shell_pid=412835 – Started review via action command
