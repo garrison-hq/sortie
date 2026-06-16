@@ -10,12 +10,12 @@
 
 | ID   | Description                                                                 | WP   | Parallel |
 | ---- | --------------------------------------------------------------------------- | ---- | -------- |
-| T001 | RunSpec `assist` + `assistSolveTimeoutMs` (zod)                             | WP01 |          |
-| T002 | Status/reason/AssistState/ChallengeDetection/RunEvent/StepOutcome additions | WP01 |          |
-| T003 | Live-view + event WS message zod schemas                                    | WP01 |          |
-| T004 | Shared `challenge/detect.ts` (pure + page-aware)                            | WP01 |          |
-| T005 | Refactor `search/engines.ts` onto shared detector                           | WP01 |          |
-| T006 | `challenge/detect.test.ts` fixtures + false-positive guard                  | WP01 |          |
+| T001 | RunSpec `assist` + `assistSolveTimeoutMs` (zod)                             | WP01 |          | [D] |
+| T002 | Status/reason/AssistState/ChallengeDetection/RunEvent/StepOutcome additions | WP01 |          | [D] |
+| T003 | Live-view + event WS message zod schemas                                    | WP01 |          | [D] |
+| T004 | Shared `challenge/detect.ts` (pure + page-aware)                            | WP01 |          | [D] |
+| T005 | Refactor `search/engines.ts` onto shared detector                           | WP01 |          | [D] |
+| T006 | `challenge/detect.test.ts` fixtures + false-positive guard                  | WP01 |          | [D] |
 | T007 | `browser/hygiene.ts` UA/locale/tz/viewport + webdriver mask + launch args   | WP02 | [P]      |
 | T008 | Apply hygiene in `manager.ts` context when assist on                        | WP02 | [P]      |
 | T009 | Expose CDP session accessor + humanized-delay helper                        | WP02 | [P]      |
@@ -61,12 +61,12 @@ assist is off.
 `challenge/detect.test.ts`; existing `search` tests stay green after refactor.
 **Requirements**: FR-001, FR-006, FR-015, FR-018, NFR-003
 
-- [ ] T001 RunSpec `assist` + `assistSolveTimeoutMs` (WP01)
-- [ ] T002 status/reason/AssistState/ChallengeDetection/RunEvent/StepOutcome additions (WP01)
-- [ ] T003 live-view + event WS message zod schemas (WP01)
-- [ ] T004 shared `challenge/detect.ts` (WP01)
-- [ ] T005 refactor `search/engines.ts` onto shared detector (WP01)
-- [ ] T006 `challenge/detect.test.ts` fixtures + false-positive guard (WP01)
+- [x] T001 RunSpec `assist` + `assistSolveTimeoutMs` (WP01)
+- [x] T002 status/reason/AssistState/ChallengeDetection/RunEvent/StepOutcome additions (WP01)
+- [x] T003 live-view + event WS message zod schemas (WP01)
+- [x] T004 shared `challenge/detect.ts` (WP01)
+- [x] T005 refactor `search/engines.ts` onto shared detector (WP01)
+- [x] T006 `challenge/detect.test.ts` fixtures + false-positive guard (WP01)
 
 **Dependencies**: none. **Risks**: detector refactor must preserve existing search behavior.
 
