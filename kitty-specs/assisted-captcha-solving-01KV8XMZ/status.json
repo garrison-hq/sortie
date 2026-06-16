@@ -1,19 +1,19 @@
 {
-  "event_count": 66,
-  "last_event_id": "01KV9BXCTSAFQPQQX9X2A5C2QW",
-  "materialized_at": "2026-06-16T23:22:53.657098+00:00",
+  "event_count": 67,
+  "last_event_id": "01KV9C25QT8YYEHKTM5DR288RR",
+  "materialized_at": "2026-06-16T23:25:30.234556+00:00",
   "mission_number": "",
   "mission_slug": "assisted-captcha-solving-01KV8XMZ",
   "mission_type": "software-dev",
   "summary": {
-    "approved": 6,
+    "approved": 7,
     "blocked": 0,
     "canceled": 0,
     "claimed": 0,
     "done": 0,
     "for_review": 0,
     "in_progress": 0,
-    "in_review": 1,
+    "in_review": 0,
     "planned": 0
   },
   "work_packages": {
@@ -60,11 +60,11 @@
       "last_transition_at": "2026-06-16T22:09:05.476816+00:00"
     },
     "WP07": {
-      "actor": "claude:opus:reviewer:reviewer",
+      "actor": "user",
       "force_count": 3,
-      "lane": "in_review",
-      "last_event_id": "01KV9BXCTSAFQPQQX9X2A5C2QW",
-      "last_transition_at": "2026-06-16T23:22:53.657098+00:00"
+      "lane": "approved",
+      "last_event_id": "01KV9C25QT8YYEHKTM5DR288RR",
+      "last_transition_at": "2026-06-16T23:25:30.234556+00:00"
     }
   }
 }
