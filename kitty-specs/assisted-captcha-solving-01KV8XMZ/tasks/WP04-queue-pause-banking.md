@@ -23,8 +23,8 @@ subtasks:
 - T018
 - T019
 - T020
-agent: "claude:sonnet:implementer:implementer"
-shell_pid: "245227"
+agent: "claude:opus:reviewer:reviewer"
+shell_pid: "270433"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/runtime/
@@ -146,3 +146,4 @@ resumeSignal }>`.
 
 - 2026-06-16T20:37:29Z – claude:sonnet:implementer:implementer – shell_pid=245227 – Started implementation via action command
 - 2026-06-16T21:04:37Z – claude:sonnet:implementer:implementer – shell_pid=245227 – Ready for review
+- 2026-06-16T21:05:02Z – claude:opus:reviewer:reviewer – shell_pid=270433 – Started review via action command
