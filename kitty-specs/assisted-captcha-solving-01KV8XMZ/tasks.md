@@ -20,10 +20,10 @@
 | T008 | Apply hygiene in `manager.ts` context when assist on                        | WP02 | [D] |
 | T009 | Expose CDP session accessor + humanized-delay helper                        | WP02 | [D] |
 | T010 | hygiene unit test + live-verify note                                        | WP02 | [D] |
-| T011 | Thread `assistEnabled` through loop options/context                         | WP03 |          |
-| T012 | Post-distill challenge check → `awaiting_human` (on) / legacy fail (off)    | WP03 |          |
-| T013 | Resume re-entry at paused step on same page + pacing call                   | WP03 |          |
-| T014 | Loop unit tests (assist on/off paths)                                       | WP03 |          |
+| T011 | Thread `assistEnabled` through loop options/context                         | WP03 |          | [D] |
+| T012 | Post-distill challenge check → `awaiting_human` (on) / legacy fail (off)    | WP03 |          | [D] |
+| T013 | Resume re-entry at paused step on same page + pacing call                   | WP03 |          | [D] |
+| T014 | Loop unit tests (assist on/off paths)                                       | WP03 |          | [D] |
 | T015 | `pausedRuns` map + `pauseRun()` non-blocking                                | WP04 |          |
 | T016 | `resume(runId)` + bank cookies + emit `run-resumed`                         | WP04 |          |
 | T017 | Solve timeout (default 10m) → `captcha_unsolved`; concurrent-pause cap      | WP04 |          |
@@ -102,10 +102,10 @@ paused step on the same page.
 assist-off yields today's fail; resume continues from the paused step.
 **Requirements**: FR-002, FR-006, FR-011, FR-012, NFR-002
 
-- [ ] T011 thread `assistEnabled` through loop options/context (WP03)
-- [ ] T012 post-distill check → `awaiting_human` (on) / legacy fail (off) (WP03)
-- [ ] T013 resume re-entry + pacing call (WP03)
-- [ ] T014 loop unit tests (WP03)
+- [x] T011 thread `assistEnabled` through loop options/context (WP03)
+- [x] T012 post-distill check → `awaiting_human` (on) / legacy fail (off) (WP03)
+- [x] T013 resume re-entry + pacing call (WP03)
+- [x] T014 loop unit tests (WP03)
 
 **Dependencies**: WP01.
 
