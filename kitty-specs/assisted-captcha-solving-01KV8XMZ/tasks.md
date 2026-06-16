@@ -16,10 +16,10 @@
 | T004 | Shared `challenge/detect.ts` (pure + page-aware)                            | WP01 |          | [D] |
 | T005 | Refactor `search/engines.ts` onto shared detector                           | WP01 |          | [D] |
 | T006 | `challenge/detect.test.ts` fixtures + false-positive guard                  | WP01 |          | [D] |
-| T007 | `browser/hygiene.ts` UA/locale/tz/viewport + webdriver mask + launch args   | WP02 | [P]      |
-| T008 | Apply hygiene in `manager.ts` context when assist on                        | WP02 | [P]      |
-| T009 | Expose CDP session accessor + humanized-delay helper                        | WP02 | [P]      |
-| T010 | hygiene unit test + live-verify note                                        | WP02 | [P]      |
+| T007 | `browser/hygiene.ts` UA/locale/tz/viewport + webdriver mask + launch args   | WP02 | [D] |
+| T008 | Apply hygiene in `manager.ts` context when assist on                        | WP02 | [D] |
+| T009 | Expose CDP session accessor + humanized-delay helper                        | WP02 | [D] |
+| T010 | hygiene unit test + live-verify note                                        | WP02 | [D] |
 | T011 | Thread `assistEnabled` through loop options/context                         | WP03 |          |
 | T012 | Post-distill challenge check → `awaiting_human` (on) / legacy fail (off)    | WP03 |          |
 | T013 | Resume re-entry at paused step on same page + pacing call                   | WP03 |          |
@@ -80,10 +80,10 @@ the live view.
 mask) and that assist-off context is unchanged.
 **Requirements**: FR-003, FR-004, FR-005, NFR-005
 
-- [ ] T007 `browser/hygiene.ts` presets + webdriver mask + launch args (WP02)
-- [ ] T008 apply hygiene in `manager.ts` when assist on (WP02)
-- [ ] T009 expose CDP session accessor + humanized-delay helper (WP02)
-- [ ] T010 hygiene unit test + live-verify note (WP02)
+- [x] T007 `browser/hygiene.ts` presets + webdriver mask + launch args (WP02)
+- [x] T008 apply hygiene in `manager.ts` when assist on (WP02)
+- [x] T009 expose CDP session accessor + humanized-delay helper (WP02)
+- [x] T010 hygiene unit test + live-verify note (WP02)
 
 **Dependencies**: none (parallel with WP01). **Risks**: over-aggressive flags could
 destabilize headless Chromium — keep minimal.
