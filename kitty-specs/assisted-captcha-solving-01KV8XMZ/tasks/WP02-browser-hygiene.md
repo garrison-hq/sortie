@@ -15,8 +15,8 @@ subtasks:
 - T008
 - T009
 - T010
-agent: "claude:sonnet:implementer:implementer"
-shell_pid: "207001"
+agent: "claude:opus:reviewer:reviewer"
+shell_pid: "215136"
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/browser/
@@ -112,3 +112,4 @@ viewport }` with a realistic current desktop-Chrome UA, `en-US`, a common timezo
 
 - 2026-06-16T20:18:33Z – claude:sonnet:implementer:implementer – shell_pid=207001 – Started implementation via action command
 - 2026-06-16T20:22:48Z – claude:sonnet:implementer:implementer – shell_pid=207001 – Ready for review: hygiene.ts + manager.ts updated, CDP accessor added, 12 new unit tests all passing, typecheck clean, lint clean
+- 2026-06-16T20:23:14Z – claude:opus:reviewer:reviewer – shell_pid=215136 – Started review via action command
