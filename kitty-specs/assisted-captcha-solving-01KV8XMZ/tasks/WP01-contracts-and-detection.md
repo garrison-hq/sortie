@@ -11,6 +11,9 @@ requirement_refs:
 planning_base_branch: feat/assisted-captcha-solving
 merge_target_branch: feat/assisted-captcha-solving
 branch_strategy: Planning artifacts for this feature were generated on feat/assisted-captcha-solving. During /spec-kitty.implement this WP may branch from a dependency-specific base, but completed changes must merge back into feat/assisted-captcha-solving unless the human explicitly redirects the landing branch.
+base_branch: kitty/mission-assisted-captcha-solving-01KV8XMZ
+base_commit: cbeab34eebe11d7b4c406a8a6e40cc92f70c22e2
+created_at: '2026-06-16T20:00:06.710591+00:00'
 subtasks:
 - T001
 - T002
@@ -18,6 +21,7 @@ subtasks:
 - T004
 - T005
 - T006
+shell_pid: '176215'
 history:
 - '2026-06-16T19:47:16Z: created by /spec-kitty.tasks'
 authoritative_surface: packages/core/src/challenge/

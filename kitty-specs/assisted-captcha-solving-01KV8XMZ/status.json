@@ -1,7 +1,7 @@
 {
-  "event_count": 7,
-  "last_event_id": "01KV8ZYW3YS9D8Q3GE4BW1N6FF",
-  "materialized_at": "2026-06-16T19:53:59.166127+00:00",
+  "event_count": 9,
+  "last_event_id": "01KV90A361XCZF1YX1YZD1C9P5",
+  "materialized_at": "2026-06-16T20:00:06.849525+00:00",
   "mission_number": "",
   "mission_slug": "assisted-captcha-solving-01KV8XMZ",
   "mission_type": "software-dev",
@@ -12,17 +12,17 @@
     "claimed": 0,
     "done": 0,
     "for_review": 0,
-    "in_progress": 0,
+    "in_progress": 1,
     "in_review": 0,
-    "planned": 7
+    "planned": 6
   },
   "work_packages": {
     "WP01": {
-      "actor": "finalize-tasks",
+      "actor": "implement-command",
       "force_count": 1,
-      "lane": "planned",
-      "last_event_id": "01KV8ZYVYCT33KJQ6RQ6MCD4CD",
-      "last_transition_at": "2026-06-16T19:53:58.988695+00:00"
+      "lane": "in_progress",
+      "last_event_id": "01KV90A361XCZF1YX1YZD1C9P5",
+      "last_transition_at": "2026-06-16T20:00:06.849525+00:00"
     },
     "WP02": {
       "actor": "finalize-tasks",
