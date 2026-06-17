@@ -40,6 +40,12 @@ describe('hygieneLaunchArgs', () => {
   it('returns a new array each call', () => {
     expect(hygieneLaunchArgs()).not.toBe(hygieneLaunchArgs());
   });
+
+  // NOTE: hygieneLaunchArgs() is NOT used by BrowserManager.launch() (see
+  // manager.ts). Launch args are process-wide and leak across all runs sharing
+  // the same browser; the automation-masking effect is achieved per-context via
+  // WEBDRIVER_MASK_SCRIPT instead. This function is kept for direct use in
+  // isolated single-run contexts (e.g. withPage in dedicated processes).
 });
 
 describe('WEBDRIVER_MASK_SCRIPT', () => {

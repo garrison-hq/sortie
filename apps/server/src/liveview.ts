@@ -26,7 +26,14 @@
  *   persisted beyond the existing screenshot capture mechanism.
  */
 import type { WebSocket } from '@fastify/websocket';
-import type { LvClientMessage, LvMouse, LvKey, RunQueue, RunStore } from '@garrison-hq/sortie';
+import type {
+  LvClientMessage,
+  LvMouse,
+  LvKey,
+  LvStopped,
+  RunQueue,
+  RunStore,
+} from '@garrison-hq/sortie';
 
 /**
  * Minimal CDP session surface used by this module. Matches the Playwright
@@ -83,6 +90,15 @@ const sessions = new Map<symbol, LiveViewSession>();
  * and to support the `store` lookup in `dispatchMouse`/`dispatchKey`.
  */
 const sessionStores = new Map<symbol, RunStore>();
+
+/**
+ * Map from WS connection id to the WebSocket for that session.
+ * Kept separate (same pattern as sessionStores) so that `stopSessionForRun`
+ * can emit `lv:stopped` with the correct reason to the attached client even
+ * when the stop is triggered from outside the per-connection handler (e.g. on
+ * solve-timeout via the server-level `run-finished` listener in ws.ts — F-3).
+ */
+const sessionSockets = new Map<symbol, WebSocket>();
 
 /** Extract the origin (scheme + host + port) from a URL string, or '' on failure. */
 function extractOrigin(url: string): string {
@@ -156,6 +172,7 @@ export async function attachSession(
   };
   sessions.set(connId, session);
   sessionStores.set(connId, store);
+  sessionSockets.set(connId, socket);
 
   // Notify client the stream is starting.
   sendJson(socket, { t: 'lv:started', runId, viewport });
@@ -307,19 +324,36 @@ export async function stopSession(connId: symbol): Promise<void> {
   session.stopped = true;
   sessions.delete(connId);
   sessionStores.delete(connId);
+  sessionSockets.delete(connId);
 
   await session.cdpSession.send('Page.stopScreencast').catch(() => {});
   await session.cdpSession.detach().catch(() => {});
 }
 
 /**
- * Stop the session for `runId` regardless of which connection owns it.
- * Called when the run resumes/cancels via non-WS paths (HTTP endpoint, queue).
- * The caller is responsible for sending `lv:stopped` with the appropriate reason.
+ * Stop the session for `runId` regardless of which connection owns it, and
+ * optionally send `lv:stopped` to the attached client before tearing down.
+ *
+ * Pass `reason` when the stop is initiated by an external event (e.g. solve
+ * timeout → `'timeout'`) so the client learns why the live view closed.
+ * Omit `reason` when the caller has already sent `lv:stopped` (e.g.
+ * `lv:resume` / `lv:cancel` handler in `handleClientMessage`).
+ *
+ * F-3: emits `lv:stopped{reason:'timeout'}` on the timeout teardown path so
+ * the typed `reason` enum member is no longer dead.
  */
-export async function stopSessionForRun(runId: string): Promise<void> {
+export async function stopSessionForRun(
+  runId: string,
+  reason?: LvStopped['reason'],
+): Promise<void> {
   for (const [connId, session] of sessions) {
     if (session.runId === runId) {
+      if (reason !== undefined) {
+        const socket = sessionSockets.get(connId);
+        if (socket) {
+          sendJson(socket, { t: 'lv:stopped', runId, reason });
+        }
+      }
       await stopSession(connId);
       return;
     }

@@ -701,3 +701,185 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
     await app.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-3: lv:stopped{reason:'timeout'} is emitted on solve-timeout teardown
+// ---------------------------------------------------------------------------
+
+describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedSchema)', () => {
+  it('stopSessionForRun with reason:"timeout" sends lv:stopped{reason:"timeout"} before tearing down', async () => {
+    // Directly verify that passing reason:'timeout' to stopSessionForRun causes
+    // the message to be sent to the attached socket before CDP teardown.
+    const { attachSession, stopSessionForRun } = await import('./liveview.js');
+    const connId = Symbol('timeout-reason-conn');
+    const runs = new Map<string, MockRunRecord>([
+      ['run-timeout', { id: 'run-timeout', status: 'awaiting_human' }],
+    ]);
+    const cdp = makeCdpSession();
+    const queue = makeQueue(runs, cdp);
+    const store = makeStore(runs);
+    const sent: unknown[] = [];
+    const mockSocket = {
+      readyState: 1,
+      OPEN: 1,
+      send: vi.fn((m: string) => sent.push(JSON.parse(m))),
+    };
+
+    await attachSession(connId, 'run-timeout', mockSocket as never, queue as never, store as never);
+
+    // Simulate the timeout teardown path — pass reason:'timeout'.
+    await stopSessionForRun('run-timeout', 'timeout');
+
+    // lv:stopped{reason:'timeout'} must have been sent to the client socket.
+    const stopped = (sent as { t: string; reason: string; runId: string }[]).find(
+      (m) => m.t === 'lv:stopped',
+    );
+    expect(stopped).toBeDefined();
+    expect(stopped?.reason).toBe('timeout');
+    expect(stopped?.runId).toBe('run-timeout');
+
+    // CDP must also have been torn down.
+    expect(cdp.detach).toHaveBeenCalled();
+  });
+
+  it('stopSessionForRun without reason does NOT send lv:stopped (caller handles it)', async () => {
+    // When no reason is passed the socket must NOT receive lv:stopped — the
+    // caller (e.g. lv:resume handler) has already sent it.
+    const { attachSession, stopSessionForRun } = await import('./liveview.js');
+    const connId = Symbol('no-reason-conn');
+    const runs = new Map<string, MockRunRecord>([
+      ['run-no-reason', { id: 'run-no-reason', status: 'awaiting_human' }],
+    ]);
+    const cdp = makeCdpSession();
+    const queue = makeQueue(runs, cdp);
+    const store = makeStore(runs);
+    const sent: unknown[] = [];
+    const mockSocket = {
+      readyState: 1,
+      OPEN: 1,
+      send: vi.fn((m: string) => sent.push(JSON.parse(m))),
+    };
+
+    await attachSession(
+      connId,
+      'run-no-reason',
+      mockSocket as never,
+      queue as never,
+      store as never,
+    );
+    mockSocket.send.mockClear();
+    sent.length = 0;
+
+    await stopSessionForRun('run-no-reason');
+
+    // No lv:stopped should have been sent by stopSessionForRun itself.
+    const stopped = (sent as { t: string }[]).find((m) => m.t === 'lv:stopped');
+    expect(stopped).toBeUndefined();
+    expect(cdp.detach).toHaveBeenCalled();
+  });
+
+  it('captcha_unsolved run-finished emits lv:stopped{reason:"timeout"} via server-level listener', async () => {
+    // End-to-end: verify the ws.ts server-level onEvent handler detects a
+    // captcha_unsolved failure and passes reason:'timeout' to stopSessionForRun.
+    const { attachSession } = await import('./liveview.js');
+    const connId = Symbol('captcha-unsolved-conn');
+    const runs = new Map<string, MockRunRecord>([
+      ['run-cu', { id: 'run-cu', status: 'awaiting_human' }],
+    ]);
+    const cdp = makeCdpSession();
+    const eventListeners: ((ev: unknown) => void)[] = [];
+    const queue = {
+      ...makeQueue(runs, cdp),
+      onEvent: vi.fn((cb: (ev: unknown) => void) => {
+        eventListeners.push(cb);
+        return () => {};
+      }),
+    };
+    const store = makeStore(runs);
+
+    const app = await buildApp({
+      store: store as never,
+      queue: queue as never,
+      dataDir: TEST_DATA_DIR,
+    });
+
+    const sent: unknown[] = [];
+    const mockSocket = {
+      readyState: 1,
+      OPEN: 1,
+      send: vi.fn((m: string) => sent.push(JSON.parse(m))),
+    };
+    await attachSession(connId, 'run-cu', mockSocket as never, queue as never, store as never);
+
+    // Simulate the timeout-triggered run-finished event (failureReason = captcha_unsolved).
+    for (const listener of eventListeners) {
+      listener({
+        type: 'run-finished',
+        runId: 'run-cu',
+        record: { id: 'run-cu', status: 'failed', failureReason: 'captcha_unsolved' },
+      });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    // lv:stopped{reason:'timeout'} must have been sent to the attached socket.
+    const stopped = (sent as { t: string; reason?: string }[]).find((m) => m.t === 'lv:stopped');
+    expect(stopped).toBeDefined();
+    expect(stopped?.reason).toBe('timeout');
+
+    // CDP torn down.
+    expect(cdp.detach).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('non-captcha run-finished does NOT send lv:stopped{timeout} (normal finish)', async () => {
+    // A run that finishes successfully should NOT trigger lv:stopped{timeout}.
+    const { attachSession } = await import('./liveview.js');
+    const connId = Symbol('normal-finish-conn');
+    const runs = new Map<string, MockRunRecord>([
+      ['run-ok', { id: 'run-ok', status: 'awaiting_human' }],
+    ]);
+    const cdp = makeCdpSession();
+    const eventListeners: ((ev: unknown) => void)[] = [];
+    const queue = {
+      ...makeQueue(runs, cdp),
+      onEvent: vi.fn((cb: (ev: unknown) => void) => {
+        eventListeners.push(cb);
+        return () => {};
+      }),
+    };
+    const store = makeStore(runs);
+
+    const app = await buildApp({
+      store: store as never,
+      queue: queue as never,
+      dataDir: TEST_DATA_DIR,
+    });
+
+    const sent: unknown[] = [];
+    const mockSocket = {
+      readyState: 1,
+      OPEN: 1,
+      send: vi.fn((m: string) => sent.push(JSON.parse(m))),
+    };
+    await attachSession(connId, 'run-ok', mockSocket as never, queue as never, store as never);
+    mockSocket.send.mockClear();
+    sent.length = 0;
+
+    // Normal success finish — no captcha_unsolved failureReason.
+    for (const listener of eventListeners) {
+      listener({
+        type: 'run-finished',
+        runId: 'run-ok',
+        record: { id: 'run-ok', status: 'success' },
+      });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    // No lv:stopped should have been sent via the timeout path.
+    const stopped = (sent as { t: string; reason?: string }[]).find((m) => m.t === 'lv:stopped');
+    expect(stopped).toBeUndefined();
+
+    await app.close();
+  });
+});

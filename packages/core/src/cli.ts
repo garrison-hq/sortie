@@ -1016,22 +1016,22 @@ async function runBatchCommand(specsFile: string, values: CliValues): Promise<vo
   const provider = buildProviderOverride(values);
 
   // The CLI runs in-process without a live-view server, so human challenge
-  // solving is unavailable. Warn when --assist is set; assistEnabled is always
-  // false here so runs fall back to graceful-fail-on-challenge behavior.
-  if (values.assist) warnAssistUnavailableInCli();
+  // solving is unavailable. Warn when --assist is set OR when any spec file
+  // entry carries assist:true — both paths must be coerced off to prevent a
+  // run from entering awaiting_human with no client able to resume it
+  // (FR-017 / F-2 fix: spec-file assist:true was previously not coerced).
+  const specFileHasAssist = specs.some((s) => s.assist);
+  if (values.assist || specFileHasAssist) warnAssistUnavailableInCli();
   const assistTimeout = parseAssistTimeout(values);
 
-  // Stamp assist-related fields onto every spec when the flags are present.
-  // assistEnabled is always false for the CLI (no live-view server), but the
-  // spec field is set so callers relying on spec.assist see the intent.
+  // Always force assist:false on every spec — the CLI has no live-view server
+  // so there is no client that could ever resume an awaiting_human run.
+  // This covers both the --assist flag path and spec-file entries that carry
+  // assist:true directly (FR-017 graceful non-interactive fallback).
   const patchedSpecs = specs.map((spec) => ({
     ...spec,
-    // assist is always false for the CLI (no live-view server); the field is
-    // stamped so the intent is visible in stored run records.
-    ...(values.assist ? { assist: false } : {}),
-    ...(values.assist && assistTimeout !== undefined
-      ? { assistSolveTimeoutMs: assistTimeout }
-      : {}),
+    assist: false as const,
+    ...(assistTimeout === undefined ? {} : { assistSolveTimeoutMs: assistTimeout }),
   }));
 
   const store = openRunStore(values);

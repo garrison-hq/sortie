@@ -10,7 +10,7 @@ import { dirname } from 'node:path';
 import { chromium } from 'playwright';
 import type { Browser, BrowserContext, CDPSession, Page } from 'playwright';
 import type { BrowserLaunchOptions, PageSessionOptions } from '../contracts.js';
-import { hygieneContextOptions, hygieneLaunchArgs, WEBDRIVER_MASK_SCRIPT } from './hygiene.js';
+import { hygieneContextOptions, WEBDRIVER_MASK_SCRIPT } from './hygiene.js';
 
 const DEFAULT_VIEWPORT = { width: 1280, height: 900 } as const;
 
@@ -32,17 +32,23 @@ export class BrowserManager {
   /**
    * Lazily launch chromium (headless by default). Safe to call multiple
    * times; concurrent calls share a single launch.
-   * When `opts.fingerprintHygiene` is true, adds `--disable-blink-features=AutomationControlled`
-   * to the launch args (C-002: hygiene only, not evasion).
+   *
+   * NOTE (SC-002 / assist-off byte-identical): launch args are NOT varied per
+   * run. `fingerprintHygiene` is applied at the CONTEXT level only
+   * (UA/locale/timezone + `navigator.webdriver` init-script via `newPage`),
+   * which is scoped to a single context and does not leak across runs that
+   * share this browser process. A process-level launch arg such as
+   * `--disable-blink-features=AutomationControlled` would be fixed at first
+   * launch and silently inherited by every later non-assist run — violating the
+   * "assist-off is byte-identical to pre-feature behavior" guarantee.
    */
   async launch(opts?: BrowserLaunchOptions): Promise<Browser> {
     if (this.browser?.isConnected()) return this.browser;
     if (this.launching) return this.launching;
 
     this.closed = false;
-    const extraArgs = opts?.fingerprintHygiene ? hygieneLaunchArgs() : [];
     this.launching = chromium
-      .launch({ headless: opts?.headless ?? true, args: extraArgs })
+      .launch({ headless: opts?.headless ?? true })
       .then((browser) => {
         this.browser = browser;
         return browser;
@@ -58,8 +64,9 @@ export class BrowserManager {
    * If `opts.storageStatePath` points to an existing file, it is loaded as
    * the context's storage state (cookies + localStorage, for session reuse).
    * If `opts.fingerprintHygiene` is true, the context is created with a
-   * realistic UA/locale/timezone and navigator.webdriver is masked via an
-   * init script (C-002: hygiene only, no specific challenge is defeated).
+   * realistic UA/locale/timezone and `navigator.webdriver` is masked via an
+   * per-context init script (C-002: hygiene only, no specific challenge is
+   * defeated). All hygiene is context-scoped and never leaks to other runs.
    */
   async newPage(
     opts?: PageSessionOptions & Pick<BrowserLaunchOptions, 'fingerprintHygiene'>,

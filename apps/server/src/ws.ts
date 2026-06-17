@@ -22,7 +22,11 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { RunEvent, RunQueue, RunStore } from '@garrison-hq/sortie';
-import { VERSION, LvClientMessageSchema } from '@garrison-hq/sortie';
+import {
+  VERSION,
+  LvClientMessageSchema,
+  FAILURE_REASON_CAPTCHA_UNSOLVED,
+} from '@garrison-hq/sortie';
 import { handleClientMessage, stopSession, stopSessionForRun } from './liveview.js';
 
 const WIRE_OBSERVATION_MAX_CHARS = 2000;
@@ -33,7 +37,17 @@ export function registerEventsRoute(app: FastifyInstance, queue: RunQueue, store
   // non-WS finish path that bypasses the HTTP/WS control surface.
   // This listener is registered once at startup (not per-connection).
   queue.onEvent((ev) => {
-    if (ev.type === 'run-finished' || ev.type === 'run-resumed') {
+    if (ev.type === 'run-finished') {
+      // F-3: emit lv:stopped{reason:'timeout'} when a solve-timeout finishes a
+      // paused run so the client learns the explicit reason (LvStoppedSchema
+      // declares 'timeout' but it was never emitted before this fix).
+      // A captcha_unsolved failure reason is the canonical signal for timeout.
+      const isTimeout = ev.record?.failureReason === FAILURE_REASON_CAPTCHA_UNSOLVED;
+      stopSessionForRun(ev.runId, isTimeout ? 'timeout' : undefined).catch(() => {});
+    } else if (ev.type === 'run-resumed') {
+      // auto-resume / manual resume via non-WS path: tear down without sending
+      // lv:stopped (the per-connection lv:resume handler already sent it for
+      // WS-initiated resumes; for auto-resume the UI learns via run-resumed).
       stopSessionForRun(ev.runId).catch(() => {});
     }
   });

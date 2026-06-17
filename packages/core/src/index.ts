@@ -68,6 +68,8 @@ export {
   // Live-view zod schemas — needed by ws.ts to validate inbound messages.
   LvClientMessageSchema,
   LvServerMessageSchema,
+  // Canonical failureReason for a CAPTCHA solve timeout (FR-015).
+  FAILURE_REASON_CAPTCHA_UNSOLVED,
 } from './contracts.js';
 
 // LLM provider layer. (Contract types re-exported by llm/index.js are
