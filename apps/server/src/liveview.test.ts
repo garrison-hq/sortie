@@ -176,38 +176,64 @@ async function buildTestApp(
   return { app, queue, store };
 }
 
+/**
+ * Build an app whose queue captures all onEvent listeners into an array so
+ * tests can fire synthetic events. Returns the app + the captured listeners
+ * array alongside the underlying queue/store/cdp from setupLiveTest.
+ */
+async function buildEventCapturingApp(runId: string, status: RunStatus = 'awaiting_human') {
+  const { cdp, queue: baseQueue, store } = setupLiveTest(runId, status);
+  const eventListeners: ((ev: unknown) => void)[] = [];
+  const queue = {
+    ...baseQueue,
+    onEvent: vi.fn((cb: (ev: unknown) => void) => {
+      eventListeners.push(cb);
+      return () => {};
+    }),
+  };
+  const app = await buildApp({
+    store: store as never,
+    queue: queue as never,
+    dataDir: TEST_DATA_DIR,
+  });
+  return { app, cdp, queue, store, eventListeners };
+}
+
+/** Fire an event through every captured listener and flush microtasks. */
+async function fireEvent(eventListeners: ((ev: unknown) => void)[], ev: unknown): Promise<void> {
+  for (const listener of eventListeners) {
+    listener(ev);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 // ---------------------------------------------------------------------------
 // T026: Resume endpoint tests
 // ---------------------------------------------------------------------------
 
 describe('POST /api/runs/:id/resume', () => {
-  let runs: Map<string, MockRunRecord>;
-  let cdp: ReturnType<typeof makeCdpSession>;
-
   beforeEach(() => {
-    runs = new Map();
-    cdp = makeCdpSession();
     vi.clearAllMocks();
   });
 
   it('returns 404 when run does not exist', async () => {
-    const { app } = await buildTestApp(runs, cdp);
+    const { app } = await buildTestApp(new Map(), makeCdpSession());
     const res = await app.inject({ method: 'POST', url: '/api/runs/nonexistent/resume' });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
 
   it('returns 409 when run is not awaiting_human', async () => {
-    runs.set('run-1', { id: 'run-1', status: 'running' });
-    const { app } = await buildTestApp(runs, cdp);
+    const runs = new Map([['run-1', { id: 'run-1', status: 'running' as RunStatus }]]);
+    const { app } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-1/resume' });
     expect(res.statusCode).toBe(409);
     await app.close();
   });
 
   it('returns 200 and calls queue.resume when run is awaiting_human', async () => {
-    runs.set('run-2', { id: 'run-2', status: 'awaiting_human' });
-    const { app, queue } = await buildTestApp(runs, cdp);
+    const runs = new Map([['run-2', { id: 'run-2', status: 'awaiting_human' as RunStatus }]]);
+    const { app, queue } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-2/resume' });
     expect(res.statusCode).toBe(200);
     expect(queue.resume).toHaveBeenCalledWith('run-2');
@@ -215,8 +241,8 @@ describe('POST /api/runs/:id/resume', () => {
   });
 
   it('returns 409 when queue.resume returns false (race condition)', async () => {
-    runs.set('run-3', { id: 'run-3', status: 'awaiting_human' });
-    const { app, queue } = await buildTestApp(runs, cdp);
+    const runs = new Map([['run-3', { id: 'run-3', status: 'awaiting_human' as RunStatus }]]);
+    const { app, queue } = await buildTestApp(runs, makeCdpSession());
     (queue.resume as MockedFunction<() => boolean>).mockReturnValue(false);
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-3/resume' });
     expect(res.statusCode).toBe(409);
@@ -229,25 +255,20 @@ describe('POST /api/runs/:id/resume', () => {
 // ---------------------------------------------------------------------------
 
 describe('DELETE /api/runs/:id with awaiting_human', () => {
-  let runs: Map<string, MockRunRecord>;
-  let cdp: ReturnType<typeof makeCdpSession>;
-
   beforeEach(() => {
-    runs = new Map();
-    cdp = makeCdpSession();
     vi.clearAllMocks();
   });
 
   it('returns 404 when run does not exist', async () => {
-    const { app } = await buildTestApp(runs, cdp);
+    const { app } = await buildTestApp(new Map(), makeCdpSession());
     const res = await app.inject({ method: 'DELETE', url: '/api/runs/nonexistent' });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
 
   it('calls queue.cancel for awaiting_human run', async () => {
-    runs.set('run-4', { id: 'run-4', status: 'awaiting_human' });
-    const { app, queue } = await buildTestApp(runs, cdp);
+    const runs = new Map([['run-4', { id: 'run-4', status: 'awaiting_human' as RunStatus }]]);
+    const { app, queue } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'DELETE', url: '/api/runs/run-4' });
     expect(res.statusCode).toBe(200);
     expect(queue.cancel).toHaveBeenCalledWith('run-4');
@@ -576,25 +597,9 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
     // Before the fix, onEvent was only used per-connection for forwarding events;
     // there was no server-level listener to call stopSessionForRun on run-finished.
     const connId = Symbol('global-event-teardown');
-    const { cdp, queue: baseQueue, store } = setupLiveTest('run-evtd');
-
-    // Capture the onEvent listeners so we can fire them manually.
-    const eventListeners: ((ev: unknown) => void)[] = [];
-    const queue = {
-      ...baseQueue,
-      onEvent: vi.fn((cb: (ev: unknown) => void) => {
-        eventListeners.push(cb);
-        return () => {};
-      }),
-    };
-
-    // Build the app — this triggers registerEventsRoute which registers the
-    // server-level onEvent listener (Finding 3 fix in ws.ts).
-    const app = await buildApp({
-      store: store as never,
-      queue: queue as never,
-      dataDir: TEST_DATA_DIR,
-    });
+    // buildEventCapturingApp registers the server-level onEvent listener
+    // (Finding 3 fix in ws.ts) and exposes the captured listeners.
+    const { app, cdp, queue, store, eventListeners } = await buildEventCapturingApp('run-evtd');
 
     // Manually attach a live-view session (simulates a WS client attaching).
     await attachTestSession(connId, 'run-evtd', queue, store);
@@ -603,11 +608,7 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
     expect(cdp.detach).not.toHaveBeenCalled();
 
     // Fire a run-finished event through all registered listeners (simulates timeout).
-    for (const listener of eventListeners) {
-      listener({ type: 'run-finished', runId: 'run-evtd' });
-    }
-    // Allow microtask teardown (stopSessionForRun is async, called via void).
-    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent(eventListeners, { type: 'run-finished', runId: 'run-evtd' });
 
     // CDP must be detached — session was torn down.
     expect(cdp.detach).toHaveBeenCalled();
@@ -617,36 +618,18 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
 
   it('run-resumed event via queue.onEvent also triggers session teardown (auto-resume path)', async () => {
     const connId = Symbol('auto-resume-teardown');
-    const { cdp, queue: baseQueue, store } = setupLiveTest('run-resume');
-
-    const eventListeners: ((ev: unknown) => void)[] = [];
-    const queue = {
-      ...baseQueue,
-      onEvent: vi.fn((cb: (ev: unknown) => void) => {
-        eventListeners.push(cb);
-        return () => {};
-      }),
-    };
-
-    const app = await buildApp({
-      store: store as never,
-      queue: queue as never,
-      dataDir: TEST_DATA_DIR,
-    });
+    const { app, cdp, queue, store, eventListeners } = await buildEventCapturingApp('run-resume');
 
     await attachTestSession(connId, 'run-resume', queue, store);
     expect(cdp.detach).not.toHaveBeenCalled();
 
     // Simulate auto-resume (detector solved the challenge internally).
-    for (const listener of eventListeners) {
-      listener({
-        type: 'run-resumed',
-        runId: 'run-resume',
-        resolution: 'solved',
-        solveSource: 'auto',
-      });
-    }
-    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent(eventListeners, {
+      type: 'run-resumed',
+      runId: 'run-resume',
+      resolution: 'solved',
+      solveSource: 'auto',
+    });
 
     expect(cdp.detach).toHaveBeenCalled();
 
@@ -691,7 +674,7 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     const { socket, sent } = makeSentSocket<{ t: string }>();
 
     await attachTestSession(connId, 'run-no-reason', queue, store, socket);
-    (socket.send as ReturnType<typeof vi.fn>).mockClear();
+    (socket.send as unknown as ReturnType<typeof vi.fn>).mockClear();
     sent.length = 0;
 
     await stopSessionForRun('run-no-reason');
@@ -705,35 +688,17 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     // End-to-end: verify the ws.ts server-level onEvent handler detects a
     // captcha_unsolved failure and passes reason:'timeout' to stopSessionForRun.
     const connId = Symbol('captcha-unsolved-conn');
-    const { cdp, queue: baseQueue, store } = setupLiveTest('run-cu');
-
-    const eventListeners: ((ev: unknown) => void)[] = [];
-    const queue = {
-      ...baseQueue,
-      onEvent: vi.fn((cb: (ev: unknown) => void) => {
-        eventListeners.push(cb);
-        return () => {};
-      }),
-    };
-
-    const app = await buildApp({
-      store: store as never,
-      queue: queue as never,
-      dataDir: TEST_DATA_DIR,
-    });
+    const { app, cdp, queue, store, eventListeners } = await buildEventCapturingApp('run-cu');
 
     const { socket, sent } = makeSentSocket<{ t: string; reason?: string }>();
     await attachTestSession(connId, 'run-cu', queue, store, socket);
 
     // Simulate the timeout-triggered run-finished event (failureReason = captcha_unsolved).
-    for (const listener of eventListeners) {
-      listener({
-        type: 'run-finished',
-        runId: 'run-cu',
-        record: { id: 'run-cu', status: 'failed', failureReason: 'captcha_unsolved' },
-      });
-    }
-    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent(eventListeners, {
+      type: 'run-finished',
+      runId: 'run-cu',
+      record: { id: 'run-cu', status: 'failed', failureReason: 'captcha_unsolved' },
+    });
 
     // lv:stopped{reason:'timeout'} must have been sent to the attached socket.
     const stopped = findStopped(sent);
@@ -749,37 +714,19 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
   it('non-captcha run-finished does NOT send lv:stopped{timeout} (normal finish)', async () => {
     // A run that finishes successfully should NOT trigger lv:stopped{timeout}.
     const connId = Symbol('normal-finish-conn');
-    const { queue: baseQueue, store } = setupLiveTest('run-ok');
-
-    const eventListeners: ((ev: unknown) => void)[] = [];
-    const queue = {
-      ...baseQueue,
-      onEvent: vi.fn((cb: (ev: unknown) => void) => {
-        eventListeners.push(cb);
-        return () => {};
-      }),
-    };
-
-    const app = await buildApp({
-      store: store as never,
-      queue: queue as never,
-      dataDir: TEST_DATA_DIR,
-    });
+    const { app, queue, store, eventListeners } = await buildEventCapturingApp('run-ok');
 
     const { socket, sent } = makeSentSocket<{ t: string; reason?: string }>();
     await attachTestSession(connId, 'run-ok', queue, store, socket);
-    (socket.send as ReturnType<typeof vi.fn>).mockClear();
+    (socket.send as unknown as ReturnType<typeof vi.fn>).mockClear();
     sent.length = 0;
 
     // Normal success finish — no captcha_unsolved failureReason.
-    for (const listener of eventListeners) {
-      listener({
-        type: 'run-finished',
-        runId: 'run-ok',
-        record: { id: 'run-ok', status: 'success' },
-      });
-    }
-    await new Promise((r) => setTimeout(r, 0));
+    await fireEvent(eventListeners, {
+      type: 'run-finished',
+      runId: 'run-ok',
+      record: { id: 'run-ok', status: 'success' },
+    });
 
     // No lv:stopped should have been sent via the timeout path.
     expect(findStopped(sent)).toBeUndefined();
