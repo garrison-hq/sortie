@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, vi, type MockedFunction } from 'vitest';
 import type { WebSocket } from '@fastify/websocket';
+import type { RunStore } from '@garrison-hq/sortie';
 import { buildApp } from './app.js';
 
 /** Safe temp dir path via os.tmpdir() (avoids sonarjs/publicly-writable-directories). */
@@ -127,7 +128,9 @@ async function attachTestSession(
   socket: WebSocket = makeMockSocket(),
 ): Promise<void> {
   const { attachSession } = await import('./liveview.js');
-  await attachSession(connId, runId, socket, queue as never, store as never);
+  // `store` mock needs a bridging cast: a NodeNext dual-module RunStatus
+  // mismatch makes the structurally-complete mock non-assignable to RunStore.
+  await attachSession(connId, runId, socket, queue, store as unknown as RunStore);
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +438,7 @@ describe('live-view input scoping (T025/T026)', () => {
 
     // Second connection tries to attach to the same run — simulate the queue
     // returning null for an already-attached run (the expected contract).
-    (queue.cdpSessionForRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    queue.cdpSessionForRun.mockResolvedValueOnce(null);
     await attachTestSession(connB, 'run-owned', queue, store, socketB);
 
     // The second connection must receive lv:stopped (error), not lv:started.

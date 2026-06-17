@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Browser } from 'playwright';
 import type {
   ChallengeDetection,
   ChatResponse,
@@ -1048,7 +1049,7 @@ describe('createRunQueue', () => {
       return mockPage as unknown as ReturnType<BrowserManager['newPage']>;
     });
     // Prevent real Chromium launch and close.
-    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as never);
+    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as unknown as Browser);
     vi.spyOn(BrowserManager.prototype, 'close').mockResolvedValue(undefined);
 
     try {
@@ -1132,7 +1133,7 @@ describe('createRunQueue', () => {
       newPageOpts.push(opts);
       return pageStub as unknown as ReturnType<BrowserManager['newPage']>;
     });
-    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as never);
+    vi.spyOn(BrowserManager.prototype, 'launch').mockResolvedValue(undefined as unknown as Browser);
     vi.spyOn(BrowserManager.prototype, 'close').mockResolvedValue(undefined);
 
     // detectChallengeOnPage: return null so the loop doesn't pause (assist path
