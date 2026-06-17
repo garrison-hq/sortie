@@ -47,6 +47,27 @@ const GENERIC_MARKERS = [
 /** DuckDuckGo-specific anomaly modal marker. */
 const DDG_ANOMALY_MARKER = 'bots use duckduckgo' as const;
 
+/**
+ * Full-page interstitial markers for the PAGE-AWARE path (agent loop).
+ *
+ * Deliberately EXCLUDES the bare service names ('recaptcha'/'grecaptcha'/
+ * 'hcaptcha'/'captcha'): invisible reCAPTCHA v3 puts a "protected by reCAPTCHA"
+ * badge + script on most ordinary login/form pages, so matching those words
+ * caused the agent to pause on pages with no challenge to solve. These phrases
+ * only appear on pages that are actually blocking the user.
+ */
+const INTERSTITIAL_MARKERS: ReadonlyArray<{ text: string; family: ChallengeFamily }> = [
+  { text: 'cf-chl', family: 'cloudflare' },
+  { text: 'checking your browser', family: 'cloudflare' },
+  { text: 'just a moment', family: 'cloudflare' },
+  { text: 'unusual traffic', family: 'generic' },
+  { text: 'are you a robot', family: 'generic' },
+  { text: 'verify you are human', family: 'generic' },
+  { text: 'verifying you are human', family: 'generic' },
+  { text: 'verify you are not a robot', family: 'generic' },
+  { text: DDG_ANOMALY_MARKER, family: 'generic' },
+];
+
 // ---------------------------------------------------------------------------
 // Pure detection function
 // ---------------------------------------------------------------------------
@@ -136,8 +157,18 @@ function classifyGenericMarker(marker: string): ChallengeDetection {
 // (same pattern as search/engines.ts — this package excludes the "dom" lib)
 // ---------------------------------------------------------------------------
 
+interface MinimalRect {
+  width: number;
+  height: number;
+}
+interface MinimalStyle {
+  display: string;
+  visibility: string;
+  opacity: string;
+}
 interface MinimalElement {
   getAttribute(name: string): string | null;
+  getBoundingClientRect(): MinimalRect;
 }
 interface MinimalNodeList {
   length: number;
@@ -153,6 +184,7 @@ interface MinimalDocument {
 }
 interface MinimalWindow {
   document: MinimalDocument;
+  getComputedStyle(element: MinimalElement): MinimalStyle;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,28 +202,62 @@ export async function detectChallengeOnPage(
   page: Page,
   snapshot: PageSnapshot,
 ): Promise<ChallengeDetection | null> {
-  // Title comes from the already-distilled snapshot (cheap, no extra call).
-  const title = snapshot.title;
-  const url = snapshot.url;
-
-  // Collect iframe srcs via evaluate (frame detection; best-effort).
-  let frameUrls: string[] = [];
+  // 1. Look for an ACTUAL interactive challenge widget that is VISIBLE on the
+  //    page. This is the key guard against invisible reCAPTCHA v3: that variant
+  //    injects a `…/recaptcha/…anchor?…size=invisible` iframe (the "protected by
+  //    reCAPTCHA" badge) on most login/form pages, with nothing for a human to
+  //    solve. We must NOT pause on it — only on a rendered checkbox, the image
+  //    challenge (bframe), or a visible hCaptcha/Turnstile widget.
+  let widget: { family: ChallengeFamily; signal: string } | null = null;
   try {
-    frameUrls = await page.evaluate((): string[] => {
-      const doc = (globalThis as unknown as MinimalWindow).document;
-      const frames = doc.querySelectorAll('iframe[src]');
-      const srcs: string[] = [];
-      for (const frame of frames) {
-        const src = frame.getAttribute('src');
-        if (src) srcs.push(src);
+    widget = (await page.evaluate((): { family: ChallengeFamily; signal: string } | null => {
+      const win = globalThis as unknown as MinimalWindow;
+      const isVisible = (el: MinimalElement): boolean => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 40 || rect.height < 40) return false;
+        const style = win.getComputedStyle(el);
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          Number(style.opacity || '1') !== 0
+        );
+      };
+      for (const frame of win.document.querySelectorAll('iframe[src]')) {
+        const src = (frame.getAttribute('src') ?? '').toLowerCase();
+        const isRecaptcha =
+          src.includes('recaptcha.net/recaptcha') || src.includes('google.com/recaptcha');
+        // The image-selection popup — only present when a human must solve it.
+        if (isRecaptcha && src.includes('bframe') && isVisible(frame)) {
+          return { family: 'recaptcha', signal: 'reCAPTCHA image challenge visible' };
+        }
+        // The v2 checkbox — but NOT the invisible-v3 badge anchor.
+        if (
+          isRecaptcha &&
+          src.includes('anchor') &&
+          !src.includes('size=invisible') &&
+          isVisible(frame)
+        ) {
+          return { family: 'recaptcha', signal: 'reCAPTCHA checkbox visible' };
+        }
+        if (src.includes('hcaptcha.com') && isVisible(frame)) {
+          return { family: 'hcaptcha', signal: 'hCaptcha widget visible' };
+        }
+        if (src.includes('challenges.cloudflare.com') && isVisible(frame)) {
+          return { family: 'turnstile', signal: 'Cloudflare Turnstile widget visible' };
+        }
       }
-      return srcs;
-    });
+      return null;
+    })) as { family: ChallengeFamily; signal: string } | null;
   } catch {
-    // Non-fatal — continue without frame inspection.
+    // Non-fatal — fall through to the interstitial text check.
+  }
+  if (widget) {
+    return { detected: true, family: widget.family, signal: widget.signal, via: 'frame' };
   }
 
-  // Body text for content markers (capped; best-effort).
+  // 2. Full-page interstitials (Cloudflare "just a moment", "verify you are
+  //    human", "unusual traffic", …) that block the whole page. We do NOT match
+  //    bare service names here (see INTERSTITIAL_MARKERS note).
   let bodyText = '';
   try {
     bodyText = await page.evaluate((limit: number): string => {
@@ -200,16 +266,16 @@ export async function detectChallengeOnPage(
       return text.slice(0, limit);
     }, CHALLENGE_TEXT_LIMIT);
   } catch {
-    // Non-fatal — empty body text may still detect via HTTP status or frames.
+    // Non-fatal.
+  }
+  const haystack = `${snapshot.title}\n${bodyText}`.toLowerCase();
+  for (const { text, family } of INTERSTITIAL_MARKERS) {
+    if (haystack.includes(text)) {
+      return { detected: true, family, signal: text, via: 'content' };
+    }
   }
 
-  // HTTP status via the most-recently-committed navigation response.
-  // Playwright doesn't expose the current response directly; we use 0 as the
-  // "unknown" sentinel. Callers in search/engines.ts pass the status explicitly
-  // via the pure detectChallenge(); the page-aware path focuses on frame/content.
-  const status = 0;
-
-  return detectChallenge({ status, title, bodyText, url, frameUrls });
+  return null;
 }
 
 // ---------------------------------------------------------------------------

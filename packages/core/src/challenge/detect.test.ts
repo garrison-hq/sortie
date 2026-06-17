@@ -5,8 +5,9 @@
  * includes a clean-page false-positive guard (≤1 false positive allowed
  * across the whole fixture set).
  */
-import { describe, expect, it } from 'vitest';
-import { detectChallenge, detectChallengeForEngine } from './detect.js';
+import { describe, expect, it, vi } from 'vitest';
+import { detectChallenge, detectChallengeForEngine, detectChallengeOnPage } from './detect.js';
+import type { PageSnapshot } from '../contracts.js';
 
 // ---------------------------------------------------------------------------
 // Type alias for detectChallenge's input shape
@@ -347,5 +348,52 @@ describe('detectChallengeForEngine', () => {
   it('only inspects the capped head of the body text', () => {
     const body = `${'x'.repeat(5_000)} captcha`;
     expect(detectChallengeForEngine('bing', 200, '', body)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectChallengeOnPage — visibility-aware page path (regression: invisible
+// reCAPTCHA v3 must NOT pause the agent)
+// ---------------------------------------------------------------------------
+
+describe('detectChallengeOnPage — interactive-only page detection', () => {
+  const snap = (title: string): PageSnapshot =>
+    ({ url: 'https://example.test', title }) as unknown as PageSnapshot;
+
+  /**
+   * Fake Playwright page. The first `evaluate()` call is the visible-widget
+   * probe (returns `widget`), the second is the body-text read (returns `body`).
+   */
+  const fakePage = (widget: unknown, body = ''): Parameters<typeof detectChallengeOnPage>[0] => {
+    const evaluate = vi.fn().mockResolvedValueOnce(widget).mockResolvedValueOnce(body);
+    return { evaluate } as unknown as Parameters<typeof detectChallengeOnPage>[0];
+  };
+
+  it('does NOT flag invisible reCAPTCHA v3 (badge text, no visible widget)', async () => {
+    // The exact false-positive that paused the Collect&Go login page.
+    const page = fakePage(
+      null,
+      'Welkom bij Collect&Go — deze website wordt beveiligd door reCAPTCHA',
+    );
+    expect(await detectChallengeOnPage(page, snap('Welkom bij Collect&Go'))).toBeNull();
+  });
+
+  it('flags a VISIBLE reCAPTCHA widget (frame probe hit)', async () => {
+    const page = fakePage({ family: 'recaptcha', signal: 'reCAPTCHA checkbox visible' });
+    const result = await detectChallengeOnPage(page, snap('Sign in'));
+    expect(result?.family).toBe('recaptcha');
+    expect(result?.via).toBe('frame');
+  });
+
+  it('flags a full-page Cloudflare interstitial via text', async () => {
+    const page = fakePage(null, 'Just a moment...');
+    const result = await detectChallengeOnPage(page, snap('Just a moment...'));
+    expect(result?.family).toBe('cloudflare');
+    expect(result?.via).toBe('content');
+  });
+
+  it('returns null for an ordinary page', async () => {
+    const page = fakePage(null, 'Welcome to our shop — browse fresh produce');
+    expect(await detectChallengeOnPage(page, snap('Shop'))).toBeNull();
   });
 });
