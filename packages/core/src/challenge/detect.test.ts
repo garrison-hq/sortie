@@ -9,25 +9,38 @@ import { describe, expect, it } from 'vitest';
 import { detectChallenge, detectChallengeForEngine } from './detect.js';
 
 // ---------------------------------------------------------------------------
-// Pure detectChallenge fixtures
+// Type alias for detectChallenge's input shape
+// ---------------------------------------------------------------------------
+
+type DetectInput = Parameters<typeof detectChallenge>[0];
+
+// ---------------------------------------------------------------------------
+// HTTP status detection — table-driven
 // ---------------------------------------------------------------------------
 
 describe('detectChallenge — HTTP status detection', () => {
-  it('flags HTTP 403 as family=http via=http', () => {
-    const result = detectChallenge({ status: 403, title: '', bodyText: '', url: '' });
+  it.each([
+    {
+      label: 'HTTP 403',
+      input: { status: 403, title: '', bodyText: '', url: '' } satisfies DetectInput,
+      family: 'http',
+      via: 'http',
+      signalPattern: /403/,
+    },
+    {
+      label: 'HTTP 429',
+      input: { status: 429, title: '', bodyText: '', url: '' } satisfies DetectInput,
+      family: 'http',
+      via: 'http',
+      signalPattern: /429/,
+    },
+  ])('flags $label as family=http via=http', ({ input, family, via, signalPattern }) => {
+    const result = detectChallenge(input);
     expect(result).not.toBeNull();
-    expect(result?.family).toBe('http');
-    expect(result?.via).toBe('http');
-    expect(result?.signal).toMatch(/403/);
+    expect(result?.family).toBe(family);
+    expect(result?.via).toBe(via);
+    expect(result?.signal).toMatch(signalPattern);
     expect(result?.detected).toBe(true);
-  });
-
-  it('flags HTTP 429 as family=http via=http', () => {
-    const result = detectChallenge({ status: 429, title: '', bodyText: '', url: '' });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('http');
-    expect(result?.via).toBe('http');
-    expect(result?.signal).toMatch(/429/);
   });
 
   it('does not flag HTTP 200 on an empty page', () => {
@@ -35,162 +48,180 @@ describe('detectChallenge — HTTP status detection', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Frame-based detection — table-driven
+// ---------------------------------------------------------------------------
+
 describe('detectChallenge — frame-based detection', () => {
-  it('detects reCAPTCHA via google.com/recaptcha frame', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Example',
-      bodyText: 'Please wait',
-      url: 'https://example.com',
-      frameUrls: ['https://www.google.com/recaptcha/api2/anchor?ar=1'],
-    });
+  it.each([
+    {
+      label: 'reCAPTCHA via google.com/recaptcha frame',
+      input: {
+        status: 200,
+        title: 'Example',
+        bodyText: 'Please wait',
+        url: 'https://example.com',
+        frameUrls: ['https://www.google.com/recaptcha/api2/anchor?ar=1'],
+      } satisfies DetectInput,
+      family: 'recaptcha',
+      via: 'frame',
+    },
+    {
+      label: 'reCAPTCHA via recaptcha.net frame',
+      input: {
+        status: 200,
+        title: 'Example',
+        bodyText: '',
+        url: 'https://example.com',
+        frameUrls: ['https://recaptcha.net/recaptcha/api2/anchor'],
+      } satisfies DetectInput,
+      family: 'recaptcha',
+      via: 'frame',
+    },
+    {
+      label: 'hCaptcha via hcaptcha.com frame',
+      input: {
+        status: 200,
+        title: 'Example',
+        bodyText: '',
+        url: 'https://example.com',
+        frameUrls: ['https://newassets.hcaptcha.com/captcha/v1/123/frame'],
+      } satisfies DetectInput,
+      family: 'hcaptcha',
+      via: 'frame',
+    },
+    {
+      label: 'Cloudflare Turnstile via challenges.cloudflare.com frame',
+      input: {
+        status: 200,
+        title: 'Just a moment...',
+        bodyText: '',
+        url: 'https://example.com',
+        frameUrls: ['https://challenges.cloudflare.com/turnstile/v0/api.js'],
+      } satisfies DetectInput,
+      family: 'turnstile',
+      via: 'frame',
+    },
+  ])('detects $label', ({ input, family, via }) => {
+    const result = detectChallenge(input);
     expect(result).not.toBeNull();
-    expect(result?.family).toBe('recaptcha');
-    expect(result?.via).toBe('frame');
-  });
-
-  it('detects reCAPTCHA via recaptcha.net frame', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Example',
-      bodyText: '',
-      url: 'https://example.com',
-      frameUrls: ['https://recaptcha.net/recaptcha/api2/anchor'],
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('recaptcha');
-    expect(result?.via).toBe('frame');
-  });
-
-  it('detects hCaptcha via hcaptcha.com frame', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Example',
-      bodyText: '',
-      url: 'https://example.com',
-      frameUrls: ['https://newassets.hcaptcha.com/captcha/v1/123/frame'],
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('hcaptcha');
-    expect(result?.via).toBe('frame');
-  });
-
-  it('detects Cloudflare Turnstile via challenges.cloudflare.com frame', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Just a moment...',
-      bodyText: '',
-      url: 'https://example.com',
-      frameUrls: ['https://challenges.cloudflare.com/turnstile/v0/api.js'],
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('turnstile');
-    expect(result?.via).toBe('frame');
+    expect(result?.family).toBe(family);
+    expect(result?.via).toBe(via);
   });
 });
 
+// ---------------------------------------------------------------------------
+// Content-based detection — table-driven
+// ---------------------------------------------------------------------------
+
 describe('detectChallenge — content-based detection', () => {
-  it('detects Cloudflare interstitial via "cf-chl" body marker', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Just a moment',
-      bodyText: 'cf-chl-widget-xyz Checking browser…',
-      url: 'https://example.com',
-    });
+  it.each([
+    {
+      label: 'Cloudflare interstitial via "cf-chl" body marker',
+      input: {
+        status: 200,
+        title: 'Just a moment',
+        bodyText: 'cf-chl-widget-xyz Checking browser…',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'cloudflare',
+      via: 'content' as const,
+    },
+    {
+      label: 'Cloudflare interstitial via "checking your browser" body marker',
+      input: {
+        status: 200,
+        title: 'Just a moment',
+        bodyText: 'Checking your browser before accessing...',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'cloudflare',
+      via: null,
+    },
+    {
+      label: 'Cloudflare interstitial via "just a moment" body marker',
+      input: {
+        status: 200,
+        title: '',
+        bodyText: 'Just a moment... Please stand by',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'cloudflare',
+      via: null,
+    },
+    {
+      label: 'generic "verify you are human" interstitial',
+      input: {
+        status: 200,
+        title: 'Verify you are human',
+        bodyText: '',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'generic',
+      via: 'marker' as const,
+    },
+    {
+      label: 'generic "are you a robot" interstitial',
+      input: {
+        status: 200,
+        title: 'Are you a robot?',
+        bodyText: '',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'generic',
+      via: null,
+    },
+    {
+      label: 'generic "unusual traffic" block page',
+      input: {
+        status: 200,
+        title: 'Our systems have detected unusual traffic',
+        bodyText: '',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'generic',
+      via: null,
+    },
+    {
+      label: 'reCAPTCHA marker in body text',
+      input: {
+        status: 200,
+        title: '',
+        bodyText: 'var grecaptcha = window.grecaptcha || {};',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'recaptcha',
+      via: 'marker' as const,
+    },
+    {
+      label: 'hcaptcha marker in body text',
+      input: {
+        status: 200,
+        title: '',
+        bodyText: 'Please complete the hcaptcha to continue.',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'hcaptcha',
+      via: 'marker' as const,
+    },
+    {
+      label: 'generic captcha marker in body text',
+      input: {
+        status: 200,
+        title: '',
+        bodyText: 'Please solve this captcha to proceed.',
+        url: 'https://example.com',
+      } satisfies DetectInput,
+      family: 'generic',
+      via: null,
+    },
+  ])('detects $label as family=$family', ({ input, family, via }) => {
+    const result = detectChallenge(input);
     expect(result).not.toBeNull();
-    expect(result?.family).toBe('cloudflare');
-    expect(result?.via).toBe('content');
-  });
-
-  it('detects Cloudflare interstitial via "checking your browser" body marker', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Just a moment',
-      bodyText: 'Checking your browser before accessing...',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('cloudflare');
-  });
-
-  it('detects Cloudflare interstitial via "just a moment" body marker', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: '',
-      bodyText: 'Just a moment... Please stand by',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('cloudflare');
-  });
-
-  it('detects generic "verify you are human" interstitial', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Verify you are human',
-      bodyText: '',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('generic');
-    expect(result?.via).toBe('marker');
-  });
-
-  it('detects generic "are you a robot" interstitial', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Are you a robot?',
-      bodyText: '',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('generic');
-  });
-
-  it('detects generic "unusual traffic" block page', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: 'Our systems have detected unusual traffic',
-      bodyText: '',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('generic');
-  });
-
-  it('detects reCAPTCHA marker in body text as family=recaptcha', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: '',
-      bodyText: 'var grecaptcha = window.grecaptcha || {};',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('recaptcha');
-    expect(result?.via).toBe('marker');
-  });
-
-  it('detects hcaptcha marker in body text as family=hcaptcha', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: '',
-      bodyText: 'Please complete the hcaptcha to continue.',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('hcaptcha');
-    expect(result?.via).toBe('marker');
-  });
-
-  it('detects generic captcha marker in body text', () => {
-    const result = detectChallenge({
-      status: 200,
-      title: '',
-      bodyText: 'Please solve this captcha to proceed.',
-      url: 'https://example.com',
-    });
-    expect(result).not.toBeNull();
-    expect(result?.family).toBe('generic');
+    expect(result?.family).toBe(family);
+    if (via !== null) {
+      expect(result?.via).toBe(via);
+    }
   });
 
   it('does not match challenge markers buried past the 4k cap', () => {
@@ -206,7 +237,7 @@ describe('detectChallenge — content-based detection', () => {
 // ---------------------------------------------------------------------------
 
 describe('detectChallenge — clean-page false-positive guard', () => {
-  const cleanPages: Array<{ label: string; input: Parameters<typeof detectChallenge>[0] }> = [
+  const cleanPages: Array<{ label: string; input: DetectInput }> = [
     {
       label: 'Bing SERP',
       input: {

@@ -119,6 +119,22 @@ function makeMockSocket(): WebSocket {
   return { readyState: 1, OPEN: 1, send: vi.fn() } as unknown as WebSocket;
 }
 
+/** Build a WebSocket that records every sent message into `sent`. */
+function makeSentSocket<T = { t: string }>(): { socket: WebSocket; sent: T[] } {
+  const sent: T[] = [];
+  const socket = {
+    readyState: 1,
+    OPEN: 1,
+    send: vi.fn((m: string) => sent.push(JSON.parse(m) as T)),
+  } as unknown as WebSocket;
+  return { socket, sent };
+}
+
+/** Find the first lv:stopped message in a sent-messages array. */
+function findStopped<T extends { t: string }>(sent: T[]): T | undefined {
+  return sent.find((m) => m.t === 'lv:stopped');
+}
+
 /** Attach a test session, performing all required type coercions in one place. */
 async function attachTestSession(
   connId: symbol,
@@ -131,6 +147,15 @@ async function attachTestSession(
   // `store` mock needs a bridging cast: a NodeNext dual-module RunStatus
   // mismatch makes the structurally-complete mock non-assignable to RunStore.
   await attachSession(connId, runId, socket, queue, store as unknown as RunStore);
+}
+
+/** Build a runs map + cdp + queue + store in one call. */
+function setupLiveTest(runId: string, status: RunStatus = 'awaiting_human') {
+  const runs = new Map<string, MockRunRecord>([[runId, { id: runId, status }]]);
+  const cdp = makeCdpSession();
+  const queue = makeQueue(runs, cdp);
+  const store = makeStore(runs);
+  return { runs, cdp, queue, store };
 }
 
 // ---------------------------------------------------------------------------
@@ -266,26 +291,12 @@ describe('live-view input scoping (T025/T026)', () => {
 
   it('attachSession sends lv:stopped when run is not awaiting_human', async () => {
     const connId = Symbol('test-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-active', { id: 'run-active', status: 'running' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { queue, store } = setupLiveTest('run-active', 'running');
+    const { socket, sent } = makeSentSocket<{ t: string }>();
 
-    const sent: string[] = [];
-    const mockSocket = {
-      readyState: 1, // OPEN
-      OPEN: 1,
-      send: vi.fn((msg: string) => {
-        sent.push(msg);
-      }),
-    } as unknown as WebSocket;
+    await attachTestSession(connId, 'run-active', queue, store, socket);
 
-    await attachTestSession(connId, 'run-active', queue, store, mockSocket);
-
-    const messages = sent.map((s) => JSON.parse(s) as { t: string });
-    expect(messages.some((m) => m.t === 'lv:stopped')).toBe(true);
+    expect(sent.some((m) => m.t === 'lv:stopped')).toBe(true);
     // CDP session should not have been requested.
     expect(queue.cdpSessionForRun).not.toHaveBeenCalled();
   });
@@ -306,12 +317,7 @@ describe('live-view input scoping (T025/T026)', () => {
     // even after the run transitions to a non-paused state.
     const { dispatchMouse } = await import('./liveview.js');
     const connId = Symbol('status-flip-mouse');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-flip', { id: 'run-flip', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { runs, cdp, queue, store } = setupLiveTest('run-flip');
 
     // Attach while awaiting_human — session is created successfully.
     await attachTestSession(connId, 'run-flip', queue, store);
@@ -341,12 +347,7 @@ describe('live-view input scoping (T025/T026)', () => {
   it('SECURITY: dispatchKey drops input when run status has left awaiting_human (Finding 2)', async () => {
     const { dispatchKey } = await import('./liveview.js');
     const connId = Symbol('status-flip-key');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-flip-key', { id: 'run-flip-key', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { runs, cdp, queue, store } = setupLiveTest('run-flip-key');
 
     await attachTestSession(connId, 'run-flip-key', queue, store);
 
@@ -412,25 +413,10 @@ describe('live-view input scoping (T025/T026)', () => {
     // or at minimum does NOT create a second active session pointing at the same run.
     const connA = Symbol('hijack-conn-a');
     const connB = Symbol('hijack-conn-b');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-owned', { id: 'run-owned', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { queue, store } = setupLiveTest('run-owned');
 
-    const sentA: { t: string }[] = [];
-    const sentB: { t: string }[] = [];
-    const socketA = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sentA.push(JSON.parse(m) as { t: string })),
-    } as unknown as WebSocket;
-    const socketB = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sentB.push(JSON.parse(m) as { t: string })),
-    } as unknown as WebSocket;
+    const { socket: socketA, sent: sentA } = makeSentSocket<{ t: string }>();
+    const { socket: socketB, sent: sentB } = makeSentSocket<{ t: string }>();
 
     // First connection attaches successfully.
     await attachTestSession(connA, 'run-owned', queue, store, socketA);
@@ -459,12 +445,7 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
     // guard handler is registered but dead — it will never fire in production.
     // This test MUST fail against any implementation that omits Page.enable.
     const connId = Symbol('page-enable-guard');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-pe', { id: 'run-pe', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { cdp, queue, store } = setupLiveTest('run-pe');
 
     await attachTestSession(connId, 'run-pe', queue, store);
 
@@ -480,10 +461,8 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
     // continue to be dispatched.
     const { dispatchMouse } = await import('./liveview.js');
     const connId = Symbol('nav-guard-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-nav', { id: 'run-nav', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { cdp, queue, store } = setupLiveTest('run-nav');
+
     // Simulate Target.getTargetInfo returning a known origin.
     cdp.send.mockImplementation((method: string) => {
       if (method === 'Target.getTargetInfo') {
@@ -491,16 +470,9 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
       }
       return Promise.resolve({});
     });
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
-    const sent: { t: string; reason?: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sent.push(JSON.parse(m) as { t: string; reason?: string })),
-    } as unknown as WebSocket;
 
-    await attachTestSession(connId, 'run-nav', queue, store, mockSocket);
+    const { socket, sent } = makeSentSocket<{ t: string; reason?: string }>();
+    await attachTestSession(connId, 'run-nav', queue, store, socket);
 
     // Verify Page.enable was sent — without it the handler is dead in production.
     expect(cdp.send).toHaveBeenCalledWith('Page.enable');
@@ -514,7 +486,7 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
     await Promise.resolve();
 
     // The session must have been torn down — lv:stopped with reason 'error'.
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
+    const stopped = findStopped(sent);
     expect(stopped).toBeDefined();
     expect(stopped?.reason).toBe('error');
 
@@ -538,26 +510,17 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
     // step redirects within the same site) must not kill the session.
     const { dispatchMouse } = await import('./liveview.js');
     const connId = Symbol('same-origin-nav-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-same-origin', { id: 'run-same-origin', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { cdp, queue, store } = setupLiveTest('run-same-origin');
+
     cdp.send.mockImplementation((method: string) => {
       if (method === 'Target.getTargetInfo') {
         return Promise.resolve({ targetInfo: { url: 'https://example.com/step1' } });
       }
       return Promise.resolve({});
     });
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
-    const sent: { t: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sent.push(JSON.parse(m) as { t: string })),
-    } as unknown as WebSocket;
 
-    await attachTestSession(connId, 'run-same-origin', queue, store, mockSocket);
+    const { socket, sent } = makeSentSocket<{ t: string }>();
+    await attachTestSession(connId, 'run-same-origin', queue, store, socket);
 
     // Same-origin navigation — should NOT trigger teardown.
     cdp.emitEvent('Page.frameNavigated', {
@@ -565,8 +528,7 @@ describe('SECURITY: origin constraint enforcement (Finding 1 / T022)', () => {
     });
     await Promise.resolve();
 
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
-    expect(stopped).toBeUndefined();
+    expect(findStopped(sent)).toBeUndefined();
 
     // Input must still work.
     cdp.send.mockClear();
@@ -594,12 +556,7 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
     // resume left CDP sessions dangling because stopSessionForRun was never called.
     const { stopSessionForRun } = await import('./liveview.js');
     const connId = Symbol('teardown-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-td', { id: 'run-td', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
+    const { cdp, queue, store } = setupLiveTest('run-td');
 
     await attachTestSession(connId, 'run-td', queue, store);
 
@@ -619,20 +576,17 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
     // Before the fix, onEvent was only used per-connection for forwarding events;
     // there was no server-level listener to call stopSessionForRun on run-finished.
     const connId = Symbol('global-event-teardown');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-evtd', { id: 'run-evtd', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { cdp, queue: baseQueue, store } = setupLiveTest('run-evtd');
+
     // Capture the onEvent listeners so we can fire them manually.
     const eventListeners: ((ev: unknown) => void)[] = [];
     const queue = {
-      ...makeQueue(runs, cdp),
+      ...baseQueue,
       onEvent: vi.fn((cb: (ev: unknown) => void) => {
         eventListeners.push(cb);
         return () => {};
       }),
     };
-    const store = makeStore(runs);
 
     // Build the app — this triggers registerEventsRoute which registers the
     // server-level onEvent listener (Finding 3 fix in ws.ts).
@@ -663,19 +617,16 @@ describe('SECURITY: live-view session torn down on queue finish/resume (Finding 
 
   it('run-resumed event via queue.onEvent also triggers session teardown (auto-resume path)', async () => {
     const connId = Symbol('auto-resume-teardown');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-resume', { id: 'run-resume', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { cdp, queue: baseQueue, store } = setupLiveTest('run-resume');
+
     const eventListeners: ((ev: unknown) => void)[] = [];
     const queue = {
-      ...makeQueue(runs, cdp),
+      ...baseQueue,
       onEvent: vi.fn((cb: (ev: unknown) => void) => {
         eventListeners.push(cb);
         return () => {};
       }),
     };
-    const store = makeStore(runs);
 
     const app = await buildApp({
       store: store as never,
@@ -713,28 +664,16 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     // the message to be sent to the attached socket before CDP teardown.
     const { stopSessionForRun } = await import('./liveview.js');
     const connId = Symbol('timeout-reason-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-timeout', { id: 'run-timeout', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
-    const sent: { t: string; reason?: string; runId?: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) =>
-        sent.push(JSON.parse(m) as { t: string; reason?: string; runId?: string }),
-      ),
-    } as unknown as WebSocket;
+    const { cdp, queue, store } = setupLiveTest('run-timeout');
+    const { socket, sent } = makeSentSocket<{ t: string; reason?: string; runId?: string }>();
 
-    await attachTestSession(connId, 'run-timeout', queue, store, mockSocket);
+    await attachTestSession(connId, 'run-timeout', queue, store, socket);
 
     // Simulate the timeout teardown path — pass reason:'timeout'.
     await stopSessionForRun('run-timeout', 'timeout');
 
     // lv:stopped{reason:'timeout'} must have been sent to the client socket.
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
+    const stopped = findStopped(sent);
     expect(stopped).toBeDefined();
     expect(stopped?.reason).toBe('timeout');
     expect(stopped?.runId).toBe('run-timeout');
@@ -748,28 +687,17 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     // caller (e.g. lv:resume handler) has already sent it.
     const { stopSessionForRun } = await import('./liveview.js');
     const connId = Symbol('no-reason-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-no-reason', { id: 'run-no-reason', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
-    const queue = makeQueue(runs, cdp);
-    const store = makeStore(runs);
-    const sent: { t: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sent.push(JSON.parse(m) as { t: string })),
-    } as unknown as WebSocket;
+    const { cdp, queue, store } = setupLiveTest('run-no-reason');
+    const { socket, sent } = makeSentSocket<{ t: string }>();
 
-    await attachTestSession(connId, 'run-no-reason', queue, store, mockSocket);
-    mockSocket.send.mockClear();
+    await attachTestSession(connId, 'run-no-reason', queue, store, socket);
+    (socket.send as ReturnType<typeof vi.fn>).mockClear();
     sent.length = 0;
 
     await stopSessionForRun('run-no-reason');
 
     // No lv:stopped should have been sent by stopSessionForRun itself.
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
-    expect(stopped).toBeUndefined();
+    expect(findStopped(sent)).toBeUndefined();
     expect(cdp.detach).toHaveBeenCalled();
   });
 
@@ -777,19 +705,16 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     // End-to-end: verify the ws.ts server-level onEvent handler detects a
     // captcha_unsolved failure and passes reason:'timeout' to stopSessionForRun.
     const connId = Symbol('captcha-unsolved-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-cu', { id: 'run-cu', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { cdp, queue: baseQueue, store } = setupLiveTest('run-cu');
+
     const eventListeners: ((ev: unknown) => void)[] = [];
     const queue = {
-      ...makeQueue(runs, cdp),
+      ...baseQueue,
       onEvent: vi.fn((cb: (ev: unknown) => void) => {
         eventListeners.push(cb);
         return () => {};
       }),
     };
-    const store = makeStore(runs);
 
     const app = await buildApp({
       store: store as never,
@@ -797,13 +722,8 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
       dataDir: TEST_DATA_DIR,
     });
 
-    const sent: { t: string; reason?: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sent.push(JSON.parse(m) as { t: string; reason?: string })),
-    } as unknown as WebSocket;
-    await attachTestSession(connId, 'run-cu', queue, store, mockSocket);
+    const { socket, sent } = makeSentSocket<{ t: string; reason?: string }>();
+    await attachTestSession(connId, 'run-cu', queue, store, socket);
 
     // Simulate the timeout-triggered run-finished event (failureReason = captcha_unsolved).
     for (const listener of eventListeners) {
@@ -816,7 +736,7 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     await new Promise((r) => setTimeout(r, 0));
 
     // lv:stopped{reason:'timeout'} must have been sent to the attached socket.
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
+    const stopped = findStopped(sent);
     expect(stopped).toBeDefined();
     expect(stopped?.reason).toBe('timeout');
 
@@ -829,19 +749,16 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
   it('non-captcha run-finished does NOT send lv:stopped{timeout} (normal finish)', async () => {
     // A run that finishes successfully should NOT trigger lv:stopped{timeout}.
     const connId = Symbol('normal-finish-conn');
-    const runs = new Map<string, MockRunRecord>([
-      ['run-ok', { id: 'run-ok', status: 'awaiting_human' }],
-    ]);
-    const cdp = makeCdpSession();
+    const { queue: baseQueue, store } = setupLiveTest('run-ok');
+
     const eventListeners: ((ev: unknown) => void)[] = [];
     const queue = {
-      ...makeQueue(runs, cdp),
+      ...baseQueue,
       onEvent: vi.fn((cb: (ev: unknown) => void) => {
         eventListeners.push(cb);
         return () => {};
       }),
     };
-    const store = makeStore(runs);
 
     const app = await buildApp({
       store: store as never,
@@ -849,14 +766,9 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
       dataDir: TEST_DATA_DIR,
     });
 
-    const sent: { t: string; reason?: string }[] = [];
-    const mockSocket = {
-      readyState: 1,
-      OPEN: 1,
-      send: vi.fn((m: string) => sent.push(JSON.parse(m) as { t: string; reason?: string })),
-    } as unknown as WebSocket;
-    await attachTestSession(connId, 'run-ok', queue, store, mockSocket);
-    mockSocket.send.mockClear();
+    const { socket, sent } = makeSentSocket<{ t: string; reason?: string }>();
+    await attachTestSession(connId, 'run-ok', queue, store, socket);
+    (socket.send as ReturnType<typeof vi.fn>).mockClear();
     sent.length = 0;
 
     // Normal success finish — no captcha_unsolved failureReason.
@@ -870,8 +782,7 @@ describe('F-3: lv:stopped{reason:"timeout"} emitted on solve-timeout (LvStoppedS
     await new Promise((r) => setTimeout(r, 0));
 
     // No lv:stopped should have been sent via the timeout path.
-    const stopped = sent.find((m) => m.t === 'lv:stopped');
-    expect(stopped).toBeUndefined();
+    expect(findStopped(sent)).toBeUndefined();
 
     await app.close();
   });
