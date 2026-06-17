@@ -224,7 +224,7 @@ describe('POST /api/runs/:id/resume', () => {
   });
 
   it('returns 409 when run is not awaiting_human', async () => {
-    const runs = new Map([['run-1', { id: 'run-1', status: 'running' as RunStatus }]]);
+    const runs = new Map<string, MockRunRecord>([['run-1', { id: 'run-1', status: 'running' }]]);
     const { app } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-1/resume' });
     expect(res.statusCode).toBe(409);
@@ -232,7 +232,9 @@ describe('POST /api/runs/:id/resume', () => {
   });
 
   it('returns 200 and calls queue.resume when run is awaiting_human', async () => {
-    const runs = new Map([['run-2', { id: 'run-2', status: 'awaiting_human' as RunStatus }]]);
+    const runs = new Map<string, MockRunRecord>([
+      ['run-2', { id: 'run-2', status: 'awaiting_human' }],
+    ]);
     const { app, queue } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-2/resume' });
     expect(res.statusCode).toBe(200);
@@ -241,7 +243,9 @@ describe('POST /api/runs/:id/resume', () => {
   });
 
   it('returns 409 when queue.resume returns false (race condition)', async () => {
-    const runs = new Map([['run-3', { id: 'run-3', status: 'awaiting_human' as RunStatus }]]);
+    const runs = new Map<string, MockRunRecord>([
+      ['run-3', { id: 'run-3', status: 'awaiting_human' }],
+    ]);
     const { app, queue } = await buildTestApp(runs, makeCdpSession());
     (queue.resume as MockedFunction<() => boolean>).mockReturnValue(false);
     const res = await app.inject({ method: 'POST', url: '/api/runs/run-3/resume' });
@@ -267,7 +271,9 @@ describe('DELETE /api/runs/:id with awaiting_human', () => {
   });
 
   it('calls queue.cancel for awaiting_human run', async () => {
-    const runs = new Map([['run-4', { id: 'run-4', status: 'awaiting_human' as RunStatus }]]);
+    const runs = new Map<string, MockRunRecord>([
+      ['run-4', { id: 'run-4', status: 'awaiting_human' }],
+    ]);
     const { app, queue } = await buildTestApp(runs, makeCdpSession());
     const res = await app.inject({ method: 'DELETE', url: '/api/runs/run-4' });
     expect(res.statusCode).toBe(200);
