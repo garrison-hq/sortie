@@ -44,9 +44,13 @@ import type {
   StepRecord,
   TokenUsage,
 } from '../contracts.js';
-import { FAILURE_REASON_CAPTCHA_UNSOLVED } from '../contracts.js';
+import {
+  FAILURE_REASON_CAPTCHA_UNSOLVED,
+  ASSIST_SOLVE_TIMEOUT_MIN_MS,
+  ASSIST_SOLVE_TIMEOUT_MAX_MS,
+} from '../contracts.js';
 import { createProvider } from '../llm/index.js';
-import { BrowserManager } from '../browser/index.js';
+import { BrowserManager, distillPage } from '../browser/index.js';
 import { extract, navigateOrPdfSnapshot, jsonSchemaToZod } from '../extract/index.js';
 import { fetchPage } from '../fetch/index.js';
 import { runAgent } from '../agent/loop.js';
@@ -64,9 +68,7 @@ const SCREENSHOT_JPEG_QUALITY = 55;
 const DEFAULT_ASSIST_SOLVE_TIMEOUT_MS = 600_000;
 /** How often the auto-resume watcher re-detects on the paused page. FR-011. */
 const AUTO_RESUME_POLL_INTERVAL_MS = 1_500;
-/** Minimum and maximum allowed solve window (mirrors RunSpecSchema). */
-const MIN_ASSIST_SOLVE_TIMEOUT_MS = 30_000;
-const MAX_ASSIST_SOLVE_TIMEOUT_MS = 3_600_000;
+// ASSIST_SOLVE_TIMEOUT_MIN_MS / MAX_MS imported from contracts.js (single source of truth).
 /** Default cap on simultaneously-paused runs. FR-016. */
 const DEFAULT_MAX_CONCURRENT_AWAITING_HUMAN = 3;
 /** Markdown cap for queued fetch runs — tighter than fetchPage's 80k default
@@ -439,8 +441,8 @@ export function createRunQueue(
 
       const solveTimeoutMs = clamp(
         item.spec.assistSolveTimeoutMs ?? DEFAULT_ASSIST_SOLVE_TIMEOUT_MS,
-        MIN_ASSIST_SOLVE_TIMEOUT_MS,
-        MAX_ASSIST_SOLVE_TIMEOUT_MS,
+        ASSIST_SOLVE_TIMEOUT_MIN_MS,
+        ASSIST_SOLVE_TIMEOUT_MAX_MS,
       );
       const pausedAt = Date.now();
       const deadlineAt = pausedAt + solveTimeoutMs;
@@ -521,6 +523,67 @@ export function createRunQueue(
   }
 
   /**
+   * Remove a paused run from all tracking state in a standardized order:
+   * stop the poll interval → clear the deadline timer → delete from the map.
+   * All callers (autoResumeResolved, expirePausedRun, cancel, resume) must use
+   * this helper to avoid order inconsistencies.
+   */
+  function deregisterPaused(runId: string, paused: PausedRun): void {
+    stopPollInterval(paused);
+    clearTimeout(paused.deadlineTimer);
+    pausedRuns.delete(runId);
+  }
+
+  /**
+   * Shared banking + emit + slot-reaccounting sequence for both the
+   * auto-resume (solveSource:'auto') and manual-resume (solveSource:'manual')
+   * paths. After `deregisterPaused` has removed the run from `pausedRuns`,
+   * this function persists the solved assist state, emits `run-resumed`, bumps
+   * `active` back up, and wakes the suspended hook.
+   *
+   * IMPORTANT: preserves the exact `.catch(() => {}).finally(...)` banking
+   * chain so banking failures can never abort the resume.
+   */
+  function resolveRun(runId: string, paused: PausedRun, solveSource: 'auto' | 'manual'): void {
+    store.updateRun(runId, { status: 'running' });
+
+    const profileName = paused.item.spec.profile;
+    const doBanking =
+      profileName === undefined
+        ? Promise.resolve()
+        : bankAssistSolve(paused.page, profileName, store);
+
+    doBanking
+      .catch(() => {
+        // Banking failures must not abort the resume.
+      })
+      .finally(() => {
+        const resolvedAt = Date.now();
+        const assistFinal: AssistState = {
+          ...paused.assist,
+          resolvedAt,
+          resolution: 'solved',
+          solveSource,
+        };
+        store.updateRun(runId, { assist: assistFinal });
+
+        emit({
+          type: 'run-resumed',
+          runId,
+          batchId: paused.item.batchId,
+          resolution: 'solved',
+          solveSource,
+        });
+
+        // Re-account for the worker slot: the hook freed it with active-- when
+        // pausing; pump's .finally will decrement active again when runItem
+        // settles. We must add back the slot now so the net effect is zero.
+        active++;
+        paused.wakeResolve();
+      });
+  }
+
+  /**
    * FR-011 auto-resume watcher callback.
    *
    * Called by the poll interval on each tick for a paused run. Re-detects the
@@ -533,16 +596,19 @@ export function createRunQueue(
     // Guard: don't poll if already resolved (race between interval and manual resume).
     if (!pausedRuns.has(runId)) return;
 
-    const currentSnapshot = {
-      url: paused.page.url(),
-      title: '',
-      outline: '',
-      elements: [],
-      text: '',
-    };
-
+    // Obtain a REAL snapshot so that title-based challenge markers (e.g.
+    // Cloudflare "Just a moment") are detected correctly. Fall back to a
+    // minimal stub on distill error so polling stays safe even on closed pages.
     // detectChallengeOnPage is async; swallow all errors so polling is safe.
-    detectChallengeOnPage(paused.page, currentSnapshot)
+    distillPage(paused.page)
+      .catch(() => ({
+        url: paused.page.url(),
+        title: '',
+        outline: '',
+        elements: [],
+        text: '',
+      }))
+      .then((currentSnapshot) => detectChallengeOnPage(paused.page, currentSnapshot))
       .then((detection) => {
         // Re-check guard after the async call in case the run was resolved while detecting.
         if (!pausedRuns.has(runId)) return;
@@ -558,51 +624,14 @@ export function createRunQueue(
 
   /**
    * Complete an automatic resume (challenge cleared by the human, detected by
-   * the poll watcher). Mirrors the manual resume() path but uses solveSource:'auto'.
-   * Guards against races with manual resume, cancel, and timeout.
+   * the poll watcher). Guards against races with manual resume, cancel, and timeout.
    */
   function autoResumeResolved(runId: string): void {
     const paused = pausedRuns.get(runId);
     if (!paused) return; // already resolved by another path
 
-    stopPollInterval(paused);
-    clearTimeout(paused.deadlineTimer);
-    pausedRuns.delete(runId);
-
-    store.updateRun(runId, { status: 'running' });
-
-    const profileName = paused.item.spec.profile;
-    const doBanking =
-      profileName === undefined
-        ? Promise.resolve()
-        : bankAssistSolve(paused.page, profileName, store);
-
-    doBanking
-      .catch(() => {
-        // Banking must not abort an auto-resume.
-      })
-      .finally(() => {
-        const resolvedAt = Date.now();
-        const assistFinal: AssistState = {
-          ...paused.assist,
-          resolvedAt,
-          resolution: 'solved',
-          solveSource: 'auto',
-        };
-        store.updateRun(runId, { assist: assistFinal });
-
-        emit({
-          type: 'run-resumed',
-          runId,
-          batchId: paused.item.batchId,
-          resolution: 'solved',
-          solveSource: 'auto',
-        });
-
-        // Re-account for the worker slot (mirrors manual resume()).
-        active++;
-        paused.wakeResolve();
-      });
+    deregisterPaused(runId, paused);
+    resolveRun(runId, paused, 'auto');
   }
 
   /**
@@ -613,9 +642,7 @@ export function createRunQueue(
   function expirePausedRun(runId: string): void {
     const paused = pausedRuns.get(runId);
     if (!paused) return;
-    pausedRuns.delete(runId);
-    stopPollInterval(paused);
-    clearTimeout(paused.deadlineTimer);
+    deregisterPaused(runId, paused);
 
     const resolvedAt = Date.now();
     const assistFinal: AssistState = {
@@ -808,9 +835,7 @@ export function createRunQueue(
       // Case 2: run is paused in awaiting_human — tear down the live context.
       const paused = pausedRuns.get(runId);
       if (paused) {
-        stopPollInterval(paused);
-        clearTimeout(paused.deadlineTimer);
-        pausedRuns.delete(runId);
+        deregisterPaused(runId, paused);
 
         const resolvedAt = Date.now();
         const assistFinal: AssistState = {
@@ -847,55 +872,8 @@ export function createRunQueue(
       const paused = pausedRuns.get(runId);
       if (!paused) return false;
 
-      // Stop the auto-resume watcher and the deadline timer before proceeding.
-      stopPollInterval(paused);
-      clearTimeout(paused.deadlineTimer);
-      pausedRuns.delete(runId);
-
-      // Persist transition back to running.
-      store.updateRun(runId, { status: 'running' });
-
-      // Bank cookies into the profile if the run uses one (T018).
-      const profileName = paused.item.spec.profile;
-      const doBanking =
-        profileName === undefined
-          ? Promise.resolve()
-          : bankAssistSolve(paused.page, profileName, store);
-
-      doBanking
-        .catch(() => {
-          // Banking failures must not abort the resume.
-        })
-        .finally(() => {
-          const resolvedAt = Date.now();
-          const assistFinal: AssistState = {
-            ...paused.assist,
-            resolvedAt,
-            resolution: 'solved',
-            solveSource: 'manual',
-          };
-          // Persist the resolved assist state before signalling.
-          store.updateRun(runId, { assist: assistFinal });
-
-          emit({
-            type: 'run-resumed',
-            runId,
-            batchId: paused.item.batchId,
-            resolution: 'solved',
-            solveSource: 'manual',
-          });
-
-          // Re-account for the worker slot: the loop continuation will
-          // complete inside runItem's .finally(), which decrements active and
-          // calls pump. We must increment active NOW so the concurrency cap
-          // accounts for this work resuming.
-          active++;
-
-          // Wake the suspended hook so the agent loop can continue on the
-          // same live page. `terminated` remains false so runItem proceeds.
-          paused.wakeResolve();
-        });
-
+      deregisterPaused(runId, paused);
+      resolveRun(runId, paused, 'manual');
       return true;
     },
 

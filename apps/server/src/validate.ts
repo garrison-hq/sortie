@@ -7,7 +7,11 @@
  * the RunSpec contract. Every validator returns human-readable problems
  * ([] = valid) so routes can answer with clear 400s.
  */
-import { isSlug } from '@garrison-hq/sortie';
+import {
+  isSlug,
+  ASSIST_SOLVE_TIMEOUT_MIN_MS,
+  ASSIST_SOLVE_TIMEOUT_MAX_MS,
+} from '@garrison-hq/sortie';
 import type {
   ListRunsOptions,
   QueryRunOverrides,
@@ -99,8 +103,15 @@ function validateRunSpecOptionals(value: Record<string, unknown>, errors: string
 /** Validate the optional assistSolveTimeoutMs field (30000–3600000). */
 function validateAssistTimeout(ms: unknown, errors: string[]): void {
   if (ms === undefined) return;
-  if (typeof ms !== 'number' || !Number.isInteger(ms) || ms < 30_000 || ms > 3_600_000) {
-    errors.push('assistSolveTimeoutMs must be an integer between 30000 and 3600000 when present');
+  if (
+    typeof ms !== 'number' ||
+    !Number.isInteger(ms) ||
+    ms < ASSIST_SOLVE_TIMEOUT_MIN_MS ||
+    ms > ASSIST_SOLVE_TIMEOUT_MAX_MS
+  ) {
+    errors.push(
+      `assistSolveTimeoutMs must be an integer between ${ASSIST_SOLVE_TIMEOUT_MIN_MS} and ${ASSIST_SOLVE_TIMEOUT_MAX_MS} when present`,
+    );
   }
 }
 

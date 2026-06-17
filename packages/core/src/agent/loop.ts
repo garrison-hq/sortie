@@ -29,10 +29,10 @@ import type {
   AgentRunOptions,
   AgentRunResult,
   AssistState,
-  ChallengeDetection,
   ChatMessage,
   LlmProvider,
   PageSnapshot,
+  StepOutcome,
   StepRecord,
   TokenUsage,
 } from '../contracts.js';
@@ -52,13 +52,6 @@ const SNAPSHOT_MAX_CHARS = 10_000;
 const SNAPSHOT_ELIDED = '[earlier page snapshot elided]';
 /** How many of the most recent snapshot blocks survive context bounding. */
 const RECENT_SNAPSHOTS_KEPT = 2;
-
-/** A step's outcome: keep looping, or terminate the run. */
-type StepOutcome<T> =
-  | { kind: 'continue' }
-  | { kind: 'success'; output: T }
-  | { kind: 'failed'; reason: string }
-  | { kind: 'awaiting_human'; detection: ChallengeDetection };
 
 /** Shared mutable state threaded through each loop iteration. */
 interface LoopState<T> {

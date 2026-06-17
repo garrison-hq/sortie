@@ -70,6 +70,9 @@ export {
   LvServerMessageSchema,
   // Canonical failureReason for a CAPTCHA solve timeout (FR-015).
   FAILURE_REASON_CAPTCHA_UNSOLVED,
+  // Assist solve-window bounds (shared by validate.ts and queue.ts). FR-014.
+  ASSIST_SOLVE_TIMEOUT_MIN_MS,
+  ASSIST_SOLVE_TIMEOUT_MAX_MS,
 } from './contracts.js';
 
 // LLM provider layer. (Contract types re-exported by llm/index.js are

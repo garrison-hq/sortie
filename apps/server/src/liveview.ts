@@ -34,6 +34,7 @@ import type {
   RunQueue,
   RunStore,
 } from '@garrison-hq/sortie';
+import { errorMessage } from './util.js';
 
 /**
  * Minimal CDP session surface used by this module. Matches the Playwright
@@ -68,6 +69,10 @@ export interface LiveViewSession {
   sending: boolean;
   pendingFrame: ScreencastFrameParams | null;
   stopped: boolean;
+  /** The RunStore for this session (used by input dispatch to re-check status). */
+  store: RunStore;
+  /** The WebSocket for this session (used by stopSessionForRun to send lv:stopped). */
+  socket: WebSocket;
 }
 
 interface ScreencastFrameParams {
@@ -81,24 +86,11 @@ interface ScreencastFrameParams {
   sessionId: number;
 }
 
-/** Map from WS connection id to its live-view session (at most one per conn). */
+/**
+ * Map from WS connection id to its live-view session (at most one per conn).
+ * `store` and `socket` are fields on `LiveViewSession` so there is ONE map.
+ */
 const sessions = new Map<symbol, LiveViewSession>();
-
-/**
- * Map from WS connection id to the `RunStore` for that session.
- * Kept separate to avoid widening `LiveViewSession` with a non-serialisable ref
- * and to support the `store` lookup in `dispatchMouse`/`dispatchKey`.
- */
-const sessionStores = new Map<symbol, RunStore>();
-
-/**
- * Map from WS connection id to the WebSocket for that session.
- * Kept separate (same pattern as sessionStores) so that `stopSessionForRun`
- * can emit `lv:stopped` with the correct reason to the attached client even
- * when the stop is triggered from outside the per-connection handler (e.g. on
- * solve-timeout via the server-level `run-finished` listener in ws.ts — F-3).
- */
-const sessionSockets = new Map<symbol, WebSocket>();
 
 /** Extract the origin (scheme + host + port) from a URL string, or '' on failure. */
 function extractOrigin(url: string): string {
@@ -169,10 +161,10 @@ export async function attachSession(
     sending: false,
     pendingFrame: null,
     stopped: false,
+    store,
+    socket,
   };
   sessions.set(connId, session);
-  sessionStores.set(connId, store);
-  sessionSockets.set(connId, socket);
 
   // Notify client the stream is starting.
   sendJson(socket, { t: 'lv:started', runId, viewport });
@@ -323,8 +315,6 @@ export async function stopSession(connId: symbol): Promise<void> {
 
   session.stopped = true;
   sessions.delete(connId);
-  sessionStores.delete(connId);
-  sessionSockets.delete(connId);
 
   await session.cdpSession.send('Page.stopScreencast').catch(() => {});
   await session.cdpSession.detach().catch(() => {});
@@ -349,10 +339,7 @@ export async function stopSessionForRun(
   for (const [connId, session] of sessions) {
     if (session.runId === runId) {
       if (reason !== undefined) {
-        const socket = sessionSockets.get(connId);
-        if (socket) {
-          sendJson(socket, { t: 'lv:stopped', runId, reason });
-        }
+        sendJson(session.socket, { t: 'lv:stopped', runId, reason });
       }
       await stopSession(connId);
       return;
@@ -387,7 +374,7 @@ export async function detachSession(connId: symbol): Promise<void> {
 export async function dispatchMouse(connId: symbol, msg: LvMouse): Promise<void> {
   const session = sessions.get(connId);
   if (!isActiveSession(session, msg.runId)) return;
-  if (!isRunAwaitingHuman(connId, session.runId)) return;
+  if (!isRunAwaitingHuman(session, session.runId)) return;
 
   // Validate coordinates within viewport.
   const { width, height } = session.viewport;
@@ -423,7 +410,7 @@ export async function dispatchMouse(connId: symbol, msg: LvMouse): Promise<void>
 export async function dispatchKey(connId: symbol, msg: LvKey): Promise<void> {
   const session = sessions.get(connId);
   if (!isActiveSession(session, msg.runId)) return;
-  if (!isRunAwaitingHuman(connId, session.runId)) return;
+  if (!isRunAwaitingHuman(session, session.runId)) return;
 
   await session.cdpSession
     .send('Input.dispatchKeyEvent', {
@@ -508,13 +495,8 @@ function isActiveSession(
  * Returns true only when the run is still `awaiting_human`.
  * Drops and logs when the run has left the paused state.
  */
-function isRunAwaitingHuman(connId: symbol, runId: string): boolean {
-  const store = sessionStores.get(connId);
-  if (!store) {
-    console.warn(`[liveview] input for run ${runId} dropped — no store reference`);
-    return false;
-  }
-  const record = store.getRun(runId);
+function isRunAwaitingHuman(session: LiveViewSession, runId: string): boolean {
+  const record = session.store.getRun(runId);
   if (record?.status !== 'awaiting_human') {
     console.warn(
       `[liveview] input for run ${runId} dropped — run status is "${record?.status ?? 'unknown'}", not "awaiting_human"`,
@@ -532,8 +514,4 @@ function sendJson(socket: WebSocket, payload: unknown): void {
   } catch {
     // A failing socket must never disturb the live-view loop.
   }
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

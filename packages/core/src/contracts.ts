@@ -273,6 +273,11 @@ export interface AssistState {
 /** Canonical failureReason value when a CAPTCHA went unsolved. FR-015. */
 export const FAILURE_REASON_CAPTCHA_UNSOLVED = 'captcha_unsolved';
 
+/** Minimum allowed solve window for assisted CAPTCHA runs (30 s). FR-014. */
+export const ASSIST_SOLVE_TIMEOUT_MIN_MS = 30_000;
+/** Maximum allowed solve window for assisted CAPTCHA runs (60 min). FR-014. */
+export const ASSIST_SOLVE_TIMEOUT_MAX_MS = 3_600_000;
+
 // ---------------------------------------------------------------------------
 // Multi-step agent loop
 // ---------------------------------------------------------------------------

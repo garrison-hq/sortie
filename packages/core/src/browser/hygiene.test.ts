@@ -8,12 +8,7 @@
  *   and webdriver mask applied here are the first line of that hygiene.
  */
 import { describe, it, expect, vi } from 'vitest';
-import {
-  hygieneContextOptions,
-  hygieneLaunchArgs,
-  WEBDRIVER_MASK_SCRIPT,
-  humanizedDelay,
-} from './hygiene.js';
+import { hygieneContextOptions, WEBDRIVER_MASK_SCRIPT, humanizedDelay } from './hygiene.js';
 
 describe('hygieneContextOptions', () => {
   it('returns expected keys with correct static values', () => {
@@ -29,23 +24,6 @@ describe('hygieneContextOptions', () => {
     const b = hygieneContextOptions();
     expect(a.viewport).not.toBe(b.viewport);
   });
-});
-
-describe('hygieneLaunchArgs', () => {
-  it('includes only the AutomationControlled disable flag', () => {
-    const args = hygieneLaunchArgs();
-    expect(args).toEqual(['--disable-blink-features=AutomationControlled']);
-  });
-
-  it('returns a new array each call', () => {
-    expect(hygieneLaunchArgs()).not.toBe(hygieneLaunchArgs());
-  });
-
-  // NOTE: hygieneLaunchArgs() is NOT used by BrowserManager.launch() (see
-  // manager.ts). Launch args are process-wide and leak across all runs sharing
-  // the same browser; the automation-masking effect is achieved per-context via
-  // WEBDRIVER_MASK_SCRIPT instead. This function is kept for direct use in
-  // isolated single-run contexts (e.g. withPage in dedicated processes).
 });
 
 describe('WEBDRIVER_MASK_SCRIPT', () => {

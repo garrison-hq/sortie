@@ -43,14 +43,6 @@ export const WEBDRIVER_MASK_SCRIPT =
   'Object.defineProperty(navigator, "webdriver", { get: () => undefined });';
 
 /**
- * Chromium launch args that disable the AutomationControlled banner/flag.
- * Keep this list minimal — aggressive flags can destabilise headless (see WP02 risks).
- */
-export function hygieneLaunchArgs(): string[] {
-  return ['--disable-blink-features=AutomationControlled'];
-}
-
-/**
  * Returns a promise that resolves after a humanised delay between `min` and
  * `max` milliseconds.  Pass a deterministic `rng` in tests so the delay is
  * predictable (e.g. `() => 0` for instant resolution).

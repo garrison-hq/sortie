@@ -35,7 +35,25 @@ vi.mock('../challenge/detect.js', () => ({
   detectionToReason: vi.fn().mockReturnValue(''),
 }));
 
+// Module-level mock for distillPage (used by M-1 fix#1 test). Default: returns
+// a minimal but non-empty snapshot so tests see the real distillPage path.
+vi.mock('../browser/index.js', async () => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- vi.importActual requires the generic; no bare-import alternative
+  const actual = await vi.importActual<typeof import('../browser/index.js')>('../browser/index.js');
+  return {
+    ...actual,
+    distillPage: vi.fn().mockResolvedValue({
+      url: 'https://captcha.test/',
+      title: 'Just a moment',
+      outline: '',
+      elements: [],
+      text: 'Checking your browser',
+    }),
+  };
+});
+
 import { detectChallengeOnPage } from '../challenge/detect.js';
+import { distillPage } from '../browser/index.js';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -1229,6 +1247,70 @@ describe('createRunQueue', () => {
     } finally {
       vi.useRealTimers();
       vi.mocked(detectChallengeOnPage).mockReset().mockResolvedValue(null);
+    }
+  });
+
+  it('M1-real-snapshot: poll calls distillPage so title-only challenges are detected (FIX#1)', async () => {
+    // Verify the correctness fix: the auto-resume poll must call distillPage on
+    // the live page so that title-based markers (e.g. Cloudflare "Just a moment")
+    // are picked up. If the poll used a stub with title:'', detectChallengeOnPage
+    // would receive no title → miss title-only challenges → falsely auto-resume.
+    const store = createFakeStore();
+    const mockDistill = vi.mocked(distillPage);
+    const mockDetect = vi.mocked(detectChallengeOnPage);
+
+    // Challenge is still present (detected); distillPage returns a non-empty title.
+    mockDistill.mockResolvedValue({
+      url: 'https://captcha.test/',
+      title: 'Just a moment',
+      outline: '',
+      elements: [],
+      text: 'Checking your browser',
+    });
+    mockDetect.mockResolvedValue(fakeDetection); // still challenged
+
+    let autoResumeCount = 0;
+
+    vi.useFakeTimers();
+    try {
+      const queue = makeQueue(store, { perDomainIntervalMs: 0 }, pauseAndYieldExec);
+      queue.onEvent((ev) => {
+        if (ev.type === 'run-resumed') autoResumeCount++;
+      });
+
+      queue.submit({
+        kind: 'agent',
+        url: 'https://captcha.test/',
+        goal: 'test',
+        assist: true,
+        assistSolveTimeoutMs: 30_000,
+      });
+
+      // Drain microtasks so the hook suspends and pausedRuns is populated.
+      await vi.runAllTimersAsync();
+      // Fire one poll tick.
+      await vi.advanceTimersByTimeAsync(1_600);
+      await vi.runAllTimersAsync();
+
+      // distillPage must have been called on the live page (FIX#1).
+      expect(mockDistill).toHaveBeenCalled();
+      // The snapshot title was non-empty; detection returned detected → no auto-resume.
+      expect(autoResumeCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      mockDistill.mockReset().mockResolvedValue({
+        url: 'https://captcha.test/',
+        title: 'Just a moment',
+        outline: '',
+        elements: [],
+        text: '',
+      });
+      mockDetect.mockReset().mockResolvedValue({
+        detected: true,
+        family: 'recaptcha',
+        signal: 'g-recaptcha',
+        via: 'content',
+      });
     }
   });
 

@@ -38,6 +38,7 @@ import {
   validateSearchBody,
 } from './validate.js';
 import { stopSessionForRun } from './liveview.js';
+import { errorMessage } from './util.js';
 
 const MAX_BATCH_SPECS = 100;
 /** Run ids are UUIDs; anything outside this never touches the filesystem. */
@@ -406,8 +407,4 @@ function conflict(reply: FastifyReply, error: string): FastifyReply {
 /** Upstream (search backend / target site) failure on a synchronous route. */
 function badGateway(reply: FastifyReply, error: string): FastifyReply {
   return reply.code(502).send({ error });
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

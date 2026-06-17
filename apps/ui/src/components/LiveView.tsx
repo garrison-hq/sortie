@@ -75,6 +75,7 @@ function modifiersFromEvent(ev: {
 
 export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const metaRef = useRef<LvFrameMetadata | null>(null);
 
   // Send lv:attach on mount, lv:detach on unmount.
@@ -110,7 +111,9 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
 
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext('2d');
+      // Cache the 2D context in a ref so we don't call getContext on every frame.
+      ctxRef.current ??= canvas.getContext('2d');
+      const ctx = ctxRef.current;
       if (!ctx) return;
 
       const img = new Image();
@@ -145,61 +148,33 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
     return 'none';
   }, []);
 
-  const onMouseDown = useCallback(
-    (ev: React.MouseEvent<HTMLCanvasElement>) => {
-      const coords = getPageCoords(ev);
-      if (!coords) return;
-      send({
-        t: 'lv:mouse',
-        runId,
-        event: 'mousePressed',
-        x: coords.x,
-        y: coords.y,
-        button: cdpButton(ev),
-        buttons: ev.buttons,
-        clickCount: 1,
-        modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
-    },
+  /**
+   * Factory for the three pointer-button handlers (down/up/move). Each differs
+   * only in the CDP event name and whether `clickCount` is included.
+   */
+  const makeMouseHandler = useCallback(
+    (cdpEvent: 'mousePressed' | 'mouseReleased' | 'mouseMoved', withClickCount: boolean) =>
+      (ev: React.MouseEvent<HTMLCanvasElement>) => {
+        const coords = getPageCoords(ev);
+        if (!coords) return;
+        send({
+          t: 'lv:mouse',
+          runId,
+          event: cdpEvent,
+          x: coords.x,
+          y: coords.y,
+          button: cdpButton(ev),
+          buttons: ev.buttons,
+          ...(withClickCount ? { clickCount: 1 } : {}),
+          modifiers: modifiersFromEvent(ev),
+        } as LvClientMessage);
+      },
     [runId, send, getPageCoords, cdpButton],
   );
 
-  const onMouseUp = useCallback(
-    (ev: React.MouseEvent<HTMLCanvasElement>) => {
-      const coords = getPageCoords(ev);
-      if (!coords) return;
-      send({
-        t: 'lv:mouse',
-        runId,
-        event: 'mouseReleased',
-        x: coords.x,
-        y: coords.y,
-        button: cdpButton(ev),
-        buttons: ev.buttons,
-        clickCount: 1,
-        modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
-    },
-    [runId, send, getPageCoords, cdpButton],
-  );
-
-  const onMouseMove = useCallback(
-    (ev: React.MouseEvent<HTMLCanvasElement>) => {
-      const coords = getPageCoords(ev);
-      if (!coords) return;
-      send({
-        t: 'lv:mouse',
-        runId,
-        event: 'mouseMoved',
-        x: coords.x,
-        y: coords.y,
-        button: cdpButton(ev),
-        buttons: ev.buttons,
-        modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
-    },
-    [runId, send, getPageCoords, cdpButton],
-  );
+  const onMouseDown = useCallback(makeMouseHandler('mousePressed', true), [makeMouseHandler]);
+  const onMouseUp = useCallback(makeMouseHandler('mouseReleased', true), [makeMouseHandler]);
+  const onMouseMove = useCallback(makeMouseHandler('mouseMoved', false), [makeMouseHandler]);
 
   const onWheel = useCallback(
     (ev: React.WheelEvent<HTMLCanvasElement>) => {
