@@ -15,7 +15,7 @@ import type {
   StepRecord,
 } from '../contracts.js';
 import { FAILURE_REASON_CAPTCHA_UNSOLVED } from '../contracts.js';
-import { BrowserManager } from '../browser/index.js';
+import { BrowserManager, distillPage } from '../browser/index.js';
 import { createRunQueue, type ExecuteRunFn } from './queue.js';
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,6 @@ vi.mock('../browser/index.js', async () => {
 });
 
 import { detectChallengeOnPage } from '../challenge/detect.js';
-import { distillPage } from '../browser/index.js';
 
 // ---------------------------------------------------------------------------
 // Fakes

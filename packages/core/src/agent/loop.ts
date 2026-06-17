@@ -92,9 +92,7 @@ export async function runAgent<T>(opts: AgentRunOptions<T>): Promise<AgentRunRes
   // trigger provider construction, so no API key is required for them.
   let resolvedProvider: LlmProvider | undefined;
   const getProvider = (): LlmProvider => {
-    if (!resolvedProvider) {
-      resolvedProvider = opts.provider ?? createProvider();
-    }
+    resolvedProvider ??= opts.provider ?? createProvider();
     return resolvedProvider;
   };
 

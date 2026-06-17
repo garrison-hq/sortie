@@ -437,8 +437,7 @@ async function handleRunAgent(args: unknown): Promise<ToolResult> {
   if ('error' in resolved) return resolved.error;
 
   const storageStatePath = resolveProfileArg('run_agent', profile);
-  const zodSchema =
-    schema === undefined ? undefined : jsonSchemaToZod(schema as Record<string, unknown>);
+  const zodSchema = isSchemaObject(schema) ? jsonSchemaToZod(schema) : undefined;
   // assistEnabled is always false in the MCP context (non-interactive stdio).
   // The assist flag is accepted to avoid breaking callers but has no effect.
   const result = await runAgent({

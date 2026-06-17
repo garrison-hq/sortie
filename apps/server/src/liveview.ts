@@ -121,7 +121,7 @@ export async function attachSession(
   await stopSession(connId);
 
   const record = store.getRun(runId);
-  if (!record || record.status !== 'awaiting_human') {
+  if (record?.status !== 'awaiting_human') {
     sendJson(socket, {
       t: 'lv:stopped',
       runId,

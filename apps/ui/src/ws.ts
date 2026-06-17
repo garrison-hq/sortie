@@ -125,7 +125,7 @@ function ensureSocket(): void {
 
 /** Send a raw object over the WebSocket; silently drops when not connected. */
 function sendRaw(msg: LvClientMessage): void {
-  if (socket === null || socket.readyState !== WebSocket.OPEN) return;
+  if (socket?.readyState !== WebSocket.OPEN) return;
   try {
     socket.send(JSON.stringify(msg));
   } catch {

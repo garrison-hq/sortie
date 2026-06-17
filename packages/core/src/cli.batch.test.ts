@@ -83,7 +83,7 @@ describe('CLI batch spec assist-coercion (F-2 / FR-017)', () => {
 
   it('assistSolveTimeoutMs is NOT added when no timeout is configured', () => {
     const specs: RunSpec[] = [{ ...BASE_SPEC, assist: true }];
-    const [patched] = applyCliAssistCoercion(specs, undefined);
+    const [patched] = applyCliAssistCoercion(specs);
     expect(patched?.assist).toBe(false);
     expect(patched?.assistSolveTimeoutMs).toBeUndefined();
   });

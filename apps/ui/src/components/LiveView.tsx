@@ -166,8 +166,7 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
           button: cdpButton(ev),
           buttons: ev.buttons,
           ...(withClickCount ? { clickCount: 1 } : {}),
-          modifiers: modifiersFromEvent(ev),
-        } as LvClientMessage);
+        });
       },
     [runId, send, getPageCoords, cdpButton],
   );
@@ -188,8 +187,7 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
         y: coords.y,
         deltaX: ev.deltaX,
         deltaY: ev.deltaY,
-        modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
+      });
     },
     [runId, send, getPageCoords],
   );
@@ -204,7 +202,7 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
         key: ev.key,
         code: ev.code,
         modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
+      });
       // Also send a char event for printable characters (CDP requires it).
       if (ev.key.length === 1) {
         send({
@@ -213,7 +211,7 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
           event: 'char',
           text: ev.key,
           modifiers: modifiersFromEvent(ev),
-        } as LvClientMessage);
+        });
       }
     },
     [runId, send],
@@ -229,7 +227,7 @@ export function LiveView({ runId, send }: Readonly<LiveViewProps>) {
         key: ev.key,
         code: ev.code,
         modifiers: modifiersFromEvent(ev),
-      } as LvClientMessage);
+      });
     },
     [runId, send],
   );

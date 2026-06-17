@@ -1,22 +1,4 @@
 <!doctype html>
-<!--
-  fake-challenge.html — local-only CAPTCHA challenge fixture for e2e tests.
-
-  Purpose: provide a deterministic page that detectChallengeOnPage() will flag
-  as a challenge without making any third-party network requests.
-
-  Markers that trigger detection (matching challenge/detect.ts GENERIC_MARKERS):
-    - Page title: "Verify you are human" (matches "verify you are human")
-    - Body text: "verify you are human" (matches GENERIC_MARKERS, family "generic")
-    - A <div class="cf-turnstile"> container (Turnstile-like, for frame/dom path)
-
-  No external scripts, fonts, or network calls are made — this file is self-
-  contained so the e2e suite runs deterministically in CI with no internet access.
-
-  The "Solve challenge" button mutates the DOM so detectChallengeOnPage() will
-  no longer find any challenge markers, and sets window.__challengeCleared__ = true
-  so tests can assert clearance without waiting for a navigation.
--->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -92,8 +74,8 @@
     </div>
 
     <script>
-      // window.__challengeCleared__ starts false; set to true when solved.
-      window.__challengeCleared__ = false;
+      // __challengeCleared__ starts false; set to true when solved.
+      globalThis.__challengeCleared__ = false;
 
       function solveChallenge() {
         // Remove all challenge markers from the DOM so detectChallengeOnPage
@@ -119,7 +101,7 @@
         if (msg) msg.style.display = 'block';
 
         // Signal to tests that the challenge was cleared.
-        window.__challengeCleared__ = true;
+        globalThis.__challengeCleared__ = true;
       }
     </script>
   </body>

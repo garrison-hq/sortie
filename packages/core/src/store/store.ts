@@ -195,7 +195,7 @@ export function createRunStore(dbPath?: string): RunStore {
         failureReason: patch.failureReason ?? existing.failureReason,
         usage: patch.usage ?? existing.usage,
         finalUrl: patch.finalUrl ?? existing.finalUrl,
-        assist: patch.assist === undefined ? existing.assist : patch.assist,
+        assist: patch.assist ?? existing.assist,
       };
       updateRunStmt.run(
         next.batchId ?? null,

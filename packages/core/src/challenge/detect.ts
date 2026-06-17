@@ -142,6 +142,7 @@ interface MinimalElement {
 interface MinimalNodeList {
   length: number;
   [index: number]: MinimalElement | undefined;
+  [Symbol.iterator](): Iterator<MinimalElement>;
 }
 interface MinimalBody {
   innerText?: string;
@@ -180,8 +181,8 @@ export async function detectChallengeOnPage(
       const doc = (globalThis as unknown as MinimalWindow).document;
       const frames = doc.querySelectorAll('iframe[src]');
       const srcs: string[] = [];
-      for (let i = 0; i < frames.length; i++) {
-        const src = frames[i]?.getAttribute('src');
+      for (const frame of frames) {
+        const src = frame.getAttribute('src');
         if (src) srcs.push(src);
       }
       return srcs;

@@ -8,6 +8,7 @@
  * All tests mock `chromium.launch` so no real browser is required.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Browser } from 'playwright';
 import * as playwright from 'playwright';
 
 // ---------------------------------------------------------------------------
@@ -55,7 +56,9 @@ describe('BrowserManager — F-1 regression: hygiene launch-arg isolation (SC-00
     const page = makeMockPage();
     const ctx = makeMockContext(page);
     const browser = makeMockBrowser(ctx);
-    launchSpy = vi.spyOn(playwright.chromium, 'launch').mockResolvedValue(browser as never);
+    launchSpy = vi
+      .spyOn(playwright.chromium, 'launch')
+      .mockResolvedValue(browser as unknown as Browser);
   });
 
   afterEach(() => {
@@ -88,7 +91,7 @@ describe('BrowserManager — F-1 regression: hygiene launch-arg isolation (SC-00
     const ctx = makeMockContext(page);
     const browser = makeMockBrowser(ctx);
     // Override so the already-connected browser is reused on second newPage.
-    launchSpy.mockResolvedValue(browser as never);
+    launchSpy.mockResolvedValue(browser as unknown as Browser);
 
     const { BrowserManager } = await import('./manager.js');
     const manager = new BrowserManager();
@@ -122,7 +125,7 @@ describe('BrowserManager — F-1 regression: hygiene launch-arg isolation (SC-00
       newContext: vi.fn().mockResolvedValueOnce(ctx1).mockResolvedValueOnce(ctx2),
       close: vi.fn().mockResolvedValue(undefined),
     };
-    launchSpy.mockResolvedValue(browser as never);
+    launchSpy.mockResolvedValue(browser as unknown as Browser);
 
     const { BrowserManager } = await import('./manager.js');
     const manager = new BrowserManager();

@@ -238,7 +238,7 @@ test.describe('assist lifecycle (T035)', () => {
               cleanup({ gotFrame: true, resumedOrSolved: false });
             }
 
-            if (msg['t'] === 'run-resumed' && (msg as Record<string, unknown>)['runId'] === runId) {
+            if (msg['t'] === 'run-resumed' && msg['runId'] === runId) {
               clearTimeout(deadline);
               cleanup({ gotFrame, resumedOrSolved: true });
             }
