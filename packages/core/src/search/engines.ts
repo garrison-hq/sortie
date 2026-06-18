@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type { Page } from 'playwright';
 import type { LlmProvider, SearchEngineId, SearchResult } from '../contracts.js';
 import { extract } from '../extract/index.js';
+import { detectChallengeForEngine } from '../challenge/detect.js';
 
 const SETTLE_TIMEOUT_MS = 5_000;
 const TITLE_LIMIT = 200;
@@ -30,22 +31,15 @@ export class SearchChallengeError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Challenge detection (pure — unit-testable without a browser)
+// Challenge detection (delegates to shared challenge/detect.ts — T005)
 // ---------------------------------------------------------------------------
-
-/** Phrases that mark a bot-challenge page on any engine. */
-const CHALLENGE_MARKERS = [
-  'captcha',
-  'unusual traffic',
-  'are you a robot',
-  'verify you are human',
-  'verifying you are human',
-  'verify you are not a robot',
-] as const;
 
 /**
  * Decide whether an engine response is a bot challenge rather than a SERP.
  * Returns a short human-readable reason, or `null` for a normal page.
+ *
+ * Delegates to the shared `detectChallengeForEngine` in `challenge/detect.ts`
+ * so marker/status constants have a single source of truth.
  *
  * Known signals (verified live): DuckDuckGo html answers HTTP 202 with an
  * "anomaly modal" ("Unfortunately, bots use DuckDuckGo too..."); Brave and
@@ -57,23 +51,7 @@ export function detectChallenge(
   title: string,
   bodyText: string,
 ): string | null {
-  if (status === 403 || status === 429) {
-    return `HTTP ${status} (blocked or rate-limited)`;
-  }
-  if (engine === 'duckduckgo' && status === 202) {
-    return 'HTTP 202 (DuckDuckGo bot challenge)';
-  }
-
-  const haystack = `${title}\n${bodyText.slice(0, CHALLENGE_TEXT_LIMIT)}`.toLowerCase();
-  for (const marker of CHALLENGE_MARKERS) {
-    if (haystack.includes(marker)) {
-      return `challenge page detected ("${marker}")`;
-    }
-  }
-  if (engine === 'duckduckgo' && haystack.includes('bots use duckduckgo')) {
-    return 'DuckDuckGo anomaly challenge modal';
-  }
-  return null;
+  return detectChallengeForEngine(engine, status, title, bodyText);
 }
 
 // ---------------------------------------------------------------------------

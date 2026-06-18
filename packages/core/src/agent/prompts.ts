@@ -9,6 +9,8 @@ export interface AgentSystemPromptOptions {
   /** JSON Schema (stringified) the done tool's result must match, if any. */
   outputSchemaJson?: string;
   maxSteps: number;
+  /** Human-in-the-loop assist is on — challenges are solved by a human, not failed. */
+  assistEnabled?: boolean;
 }
 
 /**
@@ -27,6 +29,7 @@ export function buildAgentSystemPrompt(opts: AgentSystemPromptOptions): string {
     '- Work step by step toward the goal: observe the latest snapshot, decide the single best next action, and call exactly one tool.',
     '- Element refs go STALE after any navigation or DOM change. Only ever use refs from the LATEST snapshot; never reuse a ref from an earlier snapshot.',
     '- If an action fails, read the error in the observation, re-examine the fresh snapshot, and try a different approach instead of repeating the same action.',
+    '- If the page shows a DISMISSIBLE error dialog, popup, notification, or modal overlay (e.g. "something went wrong" / "Oeps", a cookie wall, a promo or session modal) that blocks your task or makes clicks fail, call the dismiss tool to close it, then continue. The dismiss tool finds close controls ("X", "OK", "Close", "Sluiten", "Dismiss", "Probeer opnieuw") even when they are not listed as refs in the snapshot. A click that keeps timing out almost always means an overlay is covering the element — call dismiss rather than repeating the same click. (This is ordinary page handling; a CAPTCHA / anti-bot wall is different — for those, call fail.)',
     "- Use the search tool to discover relevant pages on the web (it runs in a separate tab and never disturbs the current page), and read_page to cheaply read the current page's prose (articles, docs) as Markdown — prefer read_page over extract when you just need to read text.",
     '',
     'Credentials:',
@@ -59,7 +62,9 @@ export function buildAgentSystemPrompt(opts: AgentSystemPromptOptions): string {
   }
 
   parts.push(
-    '- If you are genuinely stuck, or the page presents a CAPTCHA or other anti-bot wall, call the fail tool with a clear reason. Never attempt to bypass CAPTCHAs or anti-bot protections.',
+    opts.assistEnabled
+      ? '- This run has human-in-the-loop assistance: if a CAPTCHA or anti-bot challenge appears, the system AUTOMATICALLY pauses and a HUMAN solves it for you, then you resume. So do NOT call fail just because a CAPTCHA/challenge widget is on the page — by the time you are acting, it has been solved. Continue the task (e.g. submit the form). Never attempt to solve or bypass a CAPTCHA yourself. Only call fail if you are genuinely stuck for some OTHER reason (missing data, access denied, a dead end).'
+      : '- If you are genuinely stuck, or the page presents a CAPTCHA or other anti-bot wall, call the fail tool with a clear reason. Never attempt to bypass CAPTCHAs or anti-bot protections.',
     '- Never invent data that is not present on the page; report only what you actually observed.',
     `- You have a hard budget of ${opts.maxSteps} steps. Be economical: avoid redundant actions and finish well within the budget.`,
   );

@@ -1,8 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import type { Page } from 'playwright';
-import type { ChatRequest, ChatResponse, LlmProvider, StepRecord } from '../contracts.js';
+import type {
+  ChatRequest,
+  ChatResponse,
+  ChallengeDetection,
+  LlmProvider,
+  StepRecord,
+} from '../contracts.js';
 import { runAgent } from './loop.js';
+
+// ---------------------------------------------------------------------------
+// Module mock for challenge detection (WP03 tests)
+// ---------------------------------------------------------------------------
+vi.mock('../challenge/detect.js', () => ({
+  detectChallengeOnPage: vi.fn(),
+}));
+
+// After mocking, import the mock handle so tests can control return values.
+import { detectChallengeOnPage } from '../challenge/detect.js';
 
 const START_URL = 'https://example.com/start';
 const SECRET = 'sup3r-s3cret-hunter2-XyZ';
@@ -181,5 +197,143 @@ describe('runAgent — termination', () => {
     expect(result.status).toBe('failed');
     expect(result.failureReason).toContain('no tool call');
     expect(result.steps).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WP03 — Challenge detection + pause/resume tests (T014)
+// ---------------------------------------------------------------------------
+
+/** A ChallengeDetection fixture for reCAPTCHA. */
+const RECAPTCHA_DETECTION: ChallengeDetection = {
+  detected: true,
+  family: 'recaptcha',
+  signal: 'grecaptcha',
+  via: 'marker',
+};
+
+describe('runAgent — WP03 challenge detection + pause/resume (T014)', () => {
+  const mockDetect = vi.mocked(detectChallengeOnPage);
+
+  beforeEach(() => {
+    // Default: no challenge detected (safe baseline for all tests).
+    mockDetect.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // T014 §1 — assist ON: yields awaiting_human; LLM is NOT called on paused step.
+  it('assist ON: pauses with awaiting_human when a challenge is detected; LLM not called', async () => {
+    // First call (initial detect) → challenge; second call (recheck after resume)
+    // → still challenged → returns awaiting_human immediately.
+    mockDetect.mockResolvedValue(RECAPTCHA_DETECTION);
+
+    const { provider, requests } = makeScriptedProvider([
+      // The LLM should never be invoked — if it is, the test will fail via
+      // "scripted provider ran out of turns".
+      { tool: 'done', input: { result: null } },
+    ]);
+
+    const awaitingHumanCalls: Array<{ detection: ChallengeDetection; stepIndex: number }> = [];
+
+    const result = await runAgent({
+      goal: 'anything',
+      startUrl: START_URL,
+      provider,
+      page: makeFakePage(),
+      assistEnabled: true,
+      onAwaitingHuman: async (detection, stepIndex) => {
+        awaitingHumanCalls.push({ detection, stepIndex });
+        // Simulate the human NOT solving the challenge (recheck will still fire).
+      },
+    });
+
+    // The run paused, not failed/succeeded.
+    expect(result.status).toBe('awaiting_human');
+    expect(result.assist).toBeDefined();
+    expect(result.assist!.family).toBe('recaptcha');
+    expect(result.assist!.stepIndex).toBe(0);
+
+    // onAwaitingHuman was called with the right detection and step index.
+    expect(awaitingHumanCalls).toHaveLength(1);
+    expect(awaitingHumanCalls[0]!.detection).toEqual(RECAPTCHA_DETECTION);
+    expect(awaitingHumanCalls[0]!.stepIndex).toBe(0);
+
+    // CRITICAL: the LLM was NOT called on the paused step (C-001, T014 §3).
+    expect(requests).toHaveLength(0);
+  });
+
+  // T014 §1 — assist OFF: unchanged behavior; detection is a no-op.
+  it('assist OFF: detection is a no-op; loop proceeds normally', async () => {
+    // Even though the detector would fire, assist is off so it must be ignored.
+    mockDetect.mockResolvedValue(RECAPTCHA_DETECTION);
+
+    const { provider, requests } = makeScriptedProvider([
+      { tool: 'done', input: { result: { ok: true } } },
+    ]);
+
+    const result = await runAgent({
+      goal: 'anything',
+      startUrl: START_URL,
+      provider,
+      page: makeFakePage(),
+      // assistEnabled defaults to false — omitted deliberately.
+    });
+
+    // Loop must complete normally (not paused).
+    expect(result.status).toBe('success');
+    // LLM was called — detection was a no-op.
+    expect(requests).toHaveLength(1);
+    // The mock was NOT called because assist is off.
+    expect(mockDetect).not.toHaveBeenCalled();
+  });
+
+  // T014 §2 — Resume: continues from paused step and completes after human solves.
+  it('resumes from the paused step and completes after the human solves the challenge', async () => {
+    // Step 0: initial detect → challenge; recheck after onAwaitingHuman → cleared.
+    // Step 1: detect → null (clean page); LLM completes with done.
+    let detectCallCount = 0;
+    mockDetect.mockImplementation(async () => {
+      detectCallCount += 1;
+      // Call 1: initial detect at step 0 → challenge present.
+      // Call 2: recheck after onAwaitingHuman resolves → cleared.
+      // Call 3+: any subsequent step detect → null (clean).
+      return detectCallCount === 1 ? RECAPTCHA_DETECTION : null;
+    });
+
+    const { provider, requests } = makeScriptedProvider([
+      // After resume the loop continues at step 0 (same index) and the LLM
+      // is invoked once the challenge has cleared.
+      { tool: 'done', input: { result: { resumed: true } } },
+    ]);
+
+    let resumeCallCount = 0;
+    const result = await runAgent({
+      goal: 'anything',
+      startUrl: START_URL,
+      provider,
+      page: makeFakePage(),
+      assistEnabled: true,
+      onAwaitingHuman: async () => {
+        resumeCallCount += 1;
+        // Human solved the challenge — onAwaitingHuman resolves, loop rechecks
+        // and finds the page clean, then continues to the LLM call.
+      },
+    });
+
+    // The run completed successfully after the human solve.
+    expect(result.status).toBe('success');
+    expect((result.output as { resumed: boolean }).resumed).toBe(true);
+
+    // onAwaitingHuman was called once (one pause).
+    expect(resumeCallCount).toBe(1);
+
+    // LLM was called once — on the same step after challenge cleared.
+    expect(requests).toHaveLength(1);
+
+    // detectChallengeOnPage was called twice: initial detect + recheck.
+    expect(detectCallCount).toBe(2);
   });
 });

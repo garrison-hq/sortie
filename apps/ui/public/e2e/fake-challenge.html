@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Verify you are human</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        background: #f5f5f5;
+        color: #222;
+      }
+      .challenge-box {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 2rem 3rem;
+        text-align: center;
+        max-width: 400px;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin-bottom: 1rem;
+      }
+      /* Turnstile-like container — present for DOM-based detection heuristics */
+      .cf-turnstile {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 1rem;
+        margin: 1rem 0;
+        background: #fafafa;
+        min-height: 65px;
+        font-size: 0.85rem;
+        color: #555;
+      }
+      button {
+        margin-top: 1rem;
+        padding: 0.6rem 1.8rem;
+        background: #0070f3;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #005fd1;
+      }
+      #cleared-msg {
+        display: none;
+        color: #008000;
+        font-weight: bold;
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="challenge-box">
+      <h1 id="challenge-title">Verify you are human</h1>
+      <p id="challenge-body">verify you are human — complete the challenge below to continue.</p>
+      <!-- Turnstile-like widget container (no actual JS widget loaded) -->
+      <div class="cf-turnstile" id="turnstile-widget">[challenge widget]</div>
+      <button id="solve-btn" onclick="solveChallenge()">Solve challenge</button>
+      <p id="cleared-msg">Challenge cleared!</p>
+    </div>
+
+    <script>
+      // __challengeCleared__ starts false; set to true when solved.
+      globalThis.__challengeCleared__ = false;
+
+      function solveChallenge() {
+        // Remove all challenge markers from the DOM so detectChallengeOnPage
+        // will find nothing on a recheck.
+        var title = document.getElementById('challenge-title');
+        if (title) title.textContent = 'Access granted';
+
+        var body = document.getElementById('challenge-body');
+        if (body) body.textContent = 'You may proceed.';
+
+        // Remove the Turnstile container so DOM heuristics find nothing.
+        var widget = document.getElementById('turnstile-widget');
+        if (widget) widget.remove();
+
+        // Update the page <title> so title-based detection also clears.
+        document.title = 'Access granted';
+
+        // Hide the solve button, show the success message.
+        var btn = document.getElementById('solve-btn');
+        if (btn) btn.style.display = 'none';
+
+        var msg = document.getElementById('cleared-msg');
+        if (msg) msg.style.display = 'block';
+
+        // Signal to tests that the challenge was cleared.
+        globalThis.__challengeCleared__ = true;
+      }
+    </script>
+  </body>
+</html>

@@ -214,3 +214,55 @@ describe('executeAction — search and read_page', () => {
     expect(observation).toContain('Plain prose paragraph.');
   });
 });
+
+/** Fake page exposing just the locator surface doDismiss uses. When
+ *  `closeLabel` is set, getByText() yields one visible control with that text;
+ *  otherwise every strategy is empty so the Escape fallback fires. */
+function makeOverlayCtx(closeLabel: string | null): {
+  ctx: ExecutionContext;
+  escaped: () => boolean;
+} {
+  let escaped = false;
+  const control = {
+    isVisible: () => Promise.resolve(true),
+    innerText: () => Promise.resolve(closeLabel ?? ''),
+    getAttribute: () => Promise.resolve(null),
+    click: () => Promise.resolve(),
+  };
+  const empty = { count: () => Promise.resolve(0), nth: () => control };
+  const present = { count: () => Promise.resolve(1), nth: () => control };
+  const page = {
+    getByRole: () => empty,
+    locator: () => empty,
+    getByText: () => (closeLabel ? present : empty),
+    keyboard: {
+      press: () => {
+        escaped = true;
+        return Promise.resolve();
+      },
+    },
+    waitForLoadState: () => Promise.resolve(),
+    url: () => 'https://example.com/',
+  } as unknown as Page;
+  return { ctx: { page, credentials: {}, provider: fakeProvider }, escaped: () => escaped };
+}
+
+describe('executeAction — dismiss tool', () => {
+  it('is offered to the acting model', () => {
+    expect(AGENT_TOOLS.map((t) => t.name)).toContain('dismiss');
+  });
+
+  it('closes an overlay by clicking a visible close control (e.g. a bare <p>Close</p>)', async () => {
+    const { ctx, escaped } = makeOverlayCtx('Close');
+    const observation = await executeAction(ctx, 'dismiss', {});
+    expect(observation).toContain('Dismissed an overlay by clicking "Close"');
+    expect(escaped()).toBe(false);
+  });
+
+  it('falls back to pressing Escape when no close control is found', async () => {
+    const { ctx, escaped } = makeOverlayCtx(null);
+    const observation = await executeAction(ctx, 'dismiss', {});
+    expect(escaped()).toBe(true);
+    expect(observation.toLowerCase()).toContain('escape');
+  });
+});

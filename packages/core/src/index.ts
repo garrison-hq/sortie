@@ -50,6 +50,29 @@ export type {
   RunEvent,
   QueueOptions,
   RunQueue,
+  // Live-view WebSocket protocol (WP01/WP05)
+  LvClientMessage,
+  LvServerMessage,
+  LvAttach,
+  LvDetach,
+  LvMouse,
+  LvKey,
+  LvResume,
+  LvCancel,
+  LvStarted,
+  LvFrame,
+  LvStopped,
+} from './contracts.js';
+
+export {
+  // Live-view zod schemas — needed by ws.ts to validate inbound messages.
+  LvClientMessageSchema,
+  LvServerMessageSchema,
+  // Canonical failureReason for a CAPTCHA solve timeout (FR-015).
+  FAILURE_REASON_CAPTCHA_UNSOLVED,
+  // Assist solve-window bounds (shared by validate.ts and queue.ts). FR-014.
+  ASSIST_SOLVE_TIMEOUT_MIN_MS,
+  ASSIST_SOLVE_TIMEOUT_MAX_MS,
 } from './contracts.js';
 
 // LLM provider layer. (Contract types re-exported by llm/index.js are

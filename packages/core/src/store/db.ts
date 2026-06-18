@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS runs (
   output         TEXT,
   failure_reason TEXT,
   usage          TEXT,
-  final_url      TEXT
+  final_url      TEXT,
+  assist         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS steps (
@@ -74,6 +75,8 @@ export interface RunRow {
   failure_reason: string | null;
   usage: string | null;
   final_url: string | null;
+  /** JSON-serialized AssistState — present when the run paused for CAPTCHA. */
+  assist: string | null;
 }
 
 /** Raw shape of a `saved_queries` row as returned by better-sqlite3. */
@@ -121,5 +124,12 @@ export function openDatabase(dbPath?: string): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  // Additive migration: add `assist` column to existing databases that
+  // predate WP04. SQLite silently ignores this when the column already exists.
+  try {
+    db.exec('ALTER TABLE runs ADD COLUMN assist TEXT');
+  } catch {
+    // Column already present — safe to ignore.
+  }
   return db;
 }

@@ -9,8 +9,8 @@
  * - `fetch/`    — URL -> clean main-content Markdown (HTML or PDF)
  * - `pdf/`      — PDF download + text extraction
  */
-import type { Page, Locator } from 'playwright';
-import type { z } from 'zod';
+import type { CDPSession, Page, Locator } from 'playwright';
+import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
 // LLM provider layer
@@ -76,6 +76,10 @@ export interface ProviderConfig {
 
 export interface BrowserLaunchOptions {
   headless?: boolean;
+  /** When true, apply fingerprint-hygiene measures (realistic UA/locale/timezone,
+   *  masked navigator.webdriver, AutomationControlled flag disabled).
+   *  Driven by the `assist` option. Has no effect when false/absent. */
+  fingerprintHygiene?: boolean;
 }
 
 export interface PageSessionOptions {
@@ -230,10 +234,55 @@ export interface PdfDocument {
 }
 
 // ---------------------------------------------------------------------------
+// Challenge detection (T002, T004)
+// ---------------------------------------------------------------------------
+
+/** Which CAPTCHA/bot-wall family was detected. */
+export type ChallengeFamily =
+  | 'recaptcha'
+  | 'hcaptcha'
+  | 'turnstile'
+  | 'cloudflare'
+  | 'generic'
+  | 'http';
+
+/** Result of a successful challenge detection check. */
+export interface ChallengeDetection {
+  detected: boolean;
+  family: ChallengeFamily;
+  /** Human-readable matched marker or HTTP status. */
+  signal: string;
+  via: 'http' | 'content' | 'marker' | 'frame';
+}
+
+/** Assist pause state attached to a run while it is `awaiting_human`. */
+export interface AssistState {
+  family: ChallengeFamily;
+  signal: string;
+  stepIndex: number;
+  challengeUrl: string;
+  /** Epoch ms when the run was paused. */
+  pausedAt: number;
+  /** Epoch ms when the solve window expires. */
+  deadlineAt: number;
+  resolvedAt?: number;
+  resolution?: 'solved' | 'timeout' | 'cancelled';
+  solveSource?: 'auto' | 'manual';
+}
+
+/** Canonical failureReason value when a CAPTCHA went unsolved. FR-015. */
+export const FAILURE_REASON_CAPTCHA_UNSOLVED = 'captcha_unsolved';
+
+/** Minimum allowed solve window for assisted CAPTCHA runs (30 s). FR-014. */
+export const ASSIST_SOLVE_TIMEOUT_MIN_MS = 30_000;
+/** Maximum allowed solve window for assisted CAPTCHA runs (60 min). FR-014. */
+export const ASSIST_SOLVE_TIMEOUT_MAX_MS = 3_600_000;
+
+// ---------------------------------------------------------------------------
 // Multi-step agent loop
 // ---------------------------------------------------------------------------
 
-export type AgentStatus = 'success' | 'failed' | 'max_steps';
+export type AgentStatus = 'success' | 'failed' | 'max_steps' | 'awaiting_human';
 
 export interface AgentRunOptions<T> {
   /** Natural-language goal, e.g. "log in, add the backpack to the cart, ..." */
@@ -256,6 +305,19 @@ export interface AgentRunOptions<T> {
   credentials?: Record<string, string>;
   /** Live observer for each completed step (powers the UI live view). */
   onStep?: (step: StepRecord) => void;
+  /**
+   * Enable human-in-the-loop CAPTCHA assistance. When true, the agent loop
+   * pauses at the detected challenge step (yielding `awaiting_human`) and
+   * waits for a resume signal rather than calling the LLM. Default false.
+   * FR-002, FR-006, FR-011, FR-012.
+   */
+  assistEnabled?: boolean;
+  /**
+   * Called by the loop immediately before pausing at a detected challenge.
+   * The queue (WP04) supplies this to wire the pause into the run lifecycle.
+   * `resumeSignal` is a promise the loop awaits before continuing.
+   */
+  onAwaitingHuman?: (detection: ChallengeDetection, stepIndex: number) => Promise<void>;
 }
 
 export interface AgentAction {
@@ -286,14 +348,33 @@ export interface AgentRunResult<T> {
   steps: StepRecord[];
   usage: TokenUsage;
   finalUrl: string;
+  /** Present when status === 'awaiting_human'. */
+  assist?: AssistState;
 }
+
+/**
+ * Internal step outcome for the agent loop.
+ * `awaiting_human` is a non-terminal pause — the loop yields without advancing.
+ */
+export type StepOutcome<T> =
+  | { kind: 'continue' }
+  | { kind: 'success'; output: T }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'awaiting_human'; detection: ChallengeDetection };
 
 // ---------------------------------------------------------------------------
 // Runtime: persistence, queue, batches
 // ---------------------------------------------------------------------------
 
 export type RunKind = 'extract' | 'agent' | 'fetch';
-export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'max_steps' | 'cancelled';
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'max_steps'
+  | 'cancelled'
+  | 'awaiting_human';
 
 /** Serializable description of a run — everything needed to (re)execute it. */
 export interface RunSpec {
@@ -317,7 +398,31 @@ export interface RunSpec {
   queryName?: string;
   /** Markdown length cap (kind: fetch). Queued runs default to 40_000. */
   maxChars?: number;
+  /** Enable human-in-the-loop CAPTCHA assistance. Default false. FR-001. */
+  assist?: boolean;
+  /**
+   * Per-run solve window override in ms. Min 30_000, max 3_600_000.
+   * When omitted, the queue default (600_000) applies. FR-014.
+   */
+  assistSolveTimeoutMs?: number;
 }
+
+/** Zod schema for RunSpec — validates API payloads and queue submissions. */
+export const RunSpecSchema = z.object({
+  kind: z.enum(['extract', 'agent', 'fetch']),
+  url: z.string(),
+  schemaJson: z.record(z.string(), z.unknown()).optional(),
+  instruction: z.string().optional(),
+  goal: z.string().optional(),
+  maxSteps: z.number().int().optional(),
+  credentialNames: z.array(z.string()).optional(),
+  storageStatePath: z.string().optional(),
+  profile: z.string().optional(),
+  queryName: z.string().optional(),
+  maxChars: z.number().int().optional(),
+  assist: z.boolean().optional().default(false),
+  assistSolveTimeoutMs: z.number().int().min(30_000).max(3_600_000).optional(),
+});
 
 export interface RunRecord {
   id: string;
@@ -332,6 +437,8 @@ export interface RunRecord {
   failureReason?: string;
   usage?: TokenUsage;
   finalUrl?: string;
+  /** Present when the run is (or was) paused for CAPTCHA assistance. */
+  assist?: AssistState;
 }
 
 export interface ListRunsOptions {
@@ -416,17 +523,144 @@ export interface RunStore {
   close(): void;
 }
 
-export interface RunEvent {
-  type: 'run-queued' | 'run-started' | 'run-step' | 'run-screenshot' | 'run-finished';
-  runId: string;
-  batchId?: string;
-  /** Present on run-step. */
-  step?: StepRecord;
-  /** Present on run-queued/run-started/run-finished. */
-  record?: RunRecord;
-  /** Present on run-screenshot: JPEG saved to disk for live view + replay. */
-  screenshot?: { stepIndex: number; path: string };
-}
+// ---------------------------------------------------------------------------
+// Run events (T003)
+// ---------------------------------------------------------------------------
+
+/** Zod schema for the AssistState wire shape. */
+export const AssistStateSchema = z.object({
+  family: z.enum(['recaptcha', 'hcaptcha', 'turnstile', 'cloudflare', 'generic', 'http']),
+  signal: z.string(),
+  stepIndex: z.number().int(),
+  challengeUrl: z.string(),
+  pausedAt: z.number(),
+  deadlineAt: z.number(),
+  resolvedAt: z.number().optional(),
+  resolution: z.enum(['solved', 'timeout', 'cancelled']).optional(),
+  solveSource: z.enum(['auto', 'manual']).optional(),
+});
+
+export type RunEvent =
+  | {
+      type: 'run-queued' | 'run-started' | 'run-step' | 'run-screenshot' | 'run-finished';
+      runId: string;
+      batchId?: string;
+      /** Present on run-step. */
+      step?: StepRecord;
+      /** Present on run-queued/run-started/run-finished. */
+      record?: RunRecord;
+      /** Present on run-screenshot: JPEG saved to disk for live view + replay. */
+      screenshot?: { stepIndex: number; path: string };
+    }
+  | {
+      type: 'run-awaiting-human';
+      runId: string;
+      batchId?: string;
+      assist: AssistState;
+    }
+  | {
+      type: 'run-resumed';
+      runId: string;
+      batchId?: string;
+      resolution: 'solved' | 'cancelled';
+      solveSource?: 'auto' | 'manual';
+    };
+
+// ---------------------------------------------------------------------------
+// Live-view WebSocket protocol (T003)
+// ---------------------------------------------------------------------------
+
+// Server → client schemas
+
+export const LvStartedSchema = z.object({
+  t: z.literal('lv:started'),
+  runId: z.string(),
+  viewport: z.object({ width: z.number(), height: z.number() }),
+});
+
+export const LvFrameSchema = z.object({
+  t: z.literal('lv:frame'),
+  runId: z.string(),
+  seq: z.number().int(),
+  dataB64: z.string(),
+  metadata: z.object({
+    offsetTop: z.number(),
+    pageScaleFactor: z.number(),
+    deviceWidth: z.number(),
+    deviceHeight: z.number(),
+  }),
+});
+
+export const LvStoppedSchema = z.object({
+  t: z.literal('lv:stopped'),
+  runId: z.string(),
+  reason: z.enum(['resumed', 'cancelled', 'timeout', 'error']),
+});
+
+/** Discriminated union for all server→client live-view messages. */
+export const LvServerMessageSchema = z.discriminatedUnion('t', [
+  LvStartedSchema,
+  LvFrameSchema,
+  LvStoppedSchema,
+]);
+
+export type LvStarted = z.infer<typeof LvStartedSchema>;
+export type LvFrame = z.infer<typeof LvFrameSchema>;
+export type LvStopped = z.infer<typeof LvStoppedSchema>;
+export type LvServerMessage = z.infer<typeof LvServerMessageSchema>;
+
+// Client → server schemas
+
+export const LvAttachSchema = z.object({ t: z.literal('lv:attach'), runId: z.string() });
+export const LvDetachSchema = z.object({ t: z.literal('lv:detach'), runId: z.string() });
+
+export const LvMouseSchema = z.object({
+  t: z.literal('lv:mouse'),
+  runId: z.string(),
+  event: z.enum(['mousePressed', 'mouseReleased', 'mouseMoved', 'mouseWheel']),
+  x: z.number(),
+  y: z.number(),
+  button: z.enum(['left', 'right', 'middle', 'none']).optional(),
+  buttons: z.number().optional(),
+  clickCount: z.number().optional(),
+  deltaX: z.number().optional(),
+  deltaY: z.number().optional(),
+});
+
+export const LvKeySchema = z.object({
+  t: z.literal('lv:key'),
+  runId: z.string(),
+  event: z.enum(['keyDown', 'keyUp', 'char']),
+  key: z.string().optional(),
+  code: z.string().optional(),
+  text: z.string().optional(),
+  modifiers: z.number().optional(),
+});
+
+export const LvResumeSchema = z.object({ t: z.literal('lv:resume'), runId: z.string() });
+export const LvCancelSchema = z.object({ t: z.literal('lv:cancel'), runId: z.string() });
+
+/** Discriminated union for all client→server live-view messages. */
+export const LvClientMessageSchema = z.discriminatedUnion('t', [
+  LvAttachSchema,
+  LvDetachSchema,
+  LvMouseSchema,
+  LvKeySchema,
+  LvResumeSchema,
+  LvCancelSchema,
+]);
+
+export type LvAttach = z.infer<typeof LvAttachSchema>;
+export type LvDetach = z.infer<typeof LvDetachSchema>;
+export type LvMouse = z.infer<typeof LvMouseSchema>;
+export type LvKey = z.infer<typeof LvKeySchema>;
+export type LvResume = z.infer<typeof LvResumeSchema>;
+export type LvCancel = z.infer<typeof LvCancelSchema>;
+export type LvClientMessage = z.infer<typeof LvClientMessageSchema>;
+
+// ---------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------
 
 export interface QueueOptions {
   /** Parallel browser workers. Default 5, clamp 1..10. */
@@ -440,6 +674,12 @@ export interface QueueOptions {
   /** Per-step JPEG screenshots for live view + replay. Default enabled;
    * stored under `dir` (default $SORTIE_DATA_DIR/screenshots/<runId>/). */
   screenshots?: { enabled?: boolean; dir?: string };
+  /**
+   * Maximum number of runs that may be simultaneously paused waiting for
+   * human CAPTCHA assistance. When this cap is reached, additional challenged
+   * runs are failed gracefully instead of paused. Default 3. FR-016.
+   */
+  maxConcurrentAwaitingHuman?: number;
 }
 
 /** In-process run queue executing RunSpecs against a worker pool. */
@@ -447,6 +687,21 @@ export interface RunQueue {
   submit(spec: RunSpec): RunRecord;
   submitBatch(specs: RunSpec[]): { batchId: string; runs: RunRecord[] };
   cancel(runId: string): boolean;
+  /**
+   * Resume a run that is paused in `awaiting_human` status. The caller is
+   * responsible for having the human interact with the live browser page
+   * (via live view or direct access) before calling this. When the run uses
+   * a profile, cookies are banked back into it automatically. Returns false
+   * when the run is not currently paused. FR-011, FR-012.
+   */
+  resume(runId: string): boolean;
+  /**
+   * Open a CDP session for the live Playwright page of a run that is currently
+   * paused in `awaiting_human`. Returns null when the run is not paused.
+   * Used by WP05 live-view instrumentation (T021/T022). The caller is
+   * responsible for detaching the session when the live view stops.
+   */
+  cdpSessionForRun(runId: string): Promise<CDPSession | null>;
   /** Subscribe to lifecycle events; returns an unsubscribe function. */
   onEvent(listener: (ev: RunEvent) => void): () => void;
   /** Resolves when all currently queued/running work has settled. */
