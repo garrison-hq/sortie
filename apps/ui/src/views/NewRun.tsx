@@ -165,6 +165,7 @@ export function NewRun() {
   const [credsText, setCredsText] = useState('');
   const [profile, setProfile] = useState('');
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+  const [assist, setAssist] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savedQueryName, setSavedQueryName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -227,6 +228,7 @@ export function NewRun() {
       spec.maxChars = maxChars;
     }
     if (profile !== '') spec.profile = profile;
+    if (assist) spec.assist = true;
     return spec;
   }
 
@@ -378,6 +380,16 @@ export function NewRun() {
             </label>
           </div>
         )}
+
+        <label className="field field-checkbox">
+          <input type="checkbox" checked={assist} onChange={(e) => setAssist(e.target.checked)} />
+          <span className="field-label">
+            Assist (human-in-the-loop CAPTCHA){' '}
+            <span className="hint">
+              streams the live browser so you can solve a CAPTCHA yourself if one appears
+            </span>
+          </span>
+        </label>
 
         <label className="field">
           <span className="field-label">

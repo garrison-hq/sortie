@@ -218,8 +218,14 @@ describe('parseListQuery', () => {
     expect(errors).toEqual([
       'limit must be a positive integer',
       'offset must be a non-negative integer',
-      'status must be one of queued|running|success|failed|max_steps|cancelled',
+      'status must be one of queued|running|awaiting_human|success|failed|max_steps|cancelled',
     ]);
+  });
+
+  it('M-2: awaiting_human is a valid status filter (RUN_STATUSES includes it)', () => {
+    const { opts, errors } = parseListQuery({ status: 'awaiting_human' });
+    expect(errors).toEqual([]);
+    expect(opts.status).toBe('awaiting_human');
   });
 });
 

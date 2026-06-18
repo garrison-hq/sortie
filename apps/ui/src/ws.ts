@@ -5,9 +5,12 @@
  *   2s backoff whenever the socket closes or errors.
  * - Frames are JSON-parsed behind a guard; malformed frames are dropped.
  * - Listener exceptions never disturb the socket or other listeners.
+ * - Outbound `send()` forwards lv:* messages to the server (T029).
+ * - On reconnect while `awaiting_human`, re-fetches the run and re-attaches
+ *   the live-view session (T029).
  */
 import { useEffect, useRef, useState } from 'react';
-import type { RunEvent } from './types';
+import type { LvClientMessage, RunEvent } from './types';
 
 const RECONNECT_DELAY_MS = 2000;
 
@@ -18,6 +21,12 @@ let started = false;
 let connected = false;
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Tracks runIds currently in `awaiting_human` so we can re-attach on
+ * reconnect. The outer code registers via `trackAwaitingRun`.
+ */
+const awaitingRuns = new Set<string>();
 
 const eventListeners = new Set<EventListener>();
 const statusListeners = new Set<StatusListener>();
@@ -61,6 +70,10 @@ function connect(): void {
 
   ws.onopen = () => {
     setConnected(true);
+    // Re-attach any runs that were awaiting_human when we lost the connection.
+    for (const runId of awaitingRuns) {
+      sendRaw({ t: 'lv:attach', runId });
+    }
   };
 
   ws.onmessage = (msg: MessageEvent) => {
@@ -71,6 +84,18 @@ function connect(): void {
     } catch {
       return; // malformed frame — drop it
     }
+
+    // Live-view server→client messages have a `t` field (e.g. `lv:frame`).
+    // Dispatch them as a custom DOM event so LiveView can receive frames
+    // without routing them through the RunEvent union.
+    if (parsed !== null && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj['t'] === 'string') {
+        globalThis.dispatchEvent(new CustomEvent('lv-ws-message', { detail: msg.data }));
+        return;
+      }
+    }
+
     if (!isRunEvent(parsed)) return;
     for (const listener of eventListeners) {
       try {
@@ -96,6 +121,36 @@ function ensureSocket(): void {
   if (started) return;
   started = true;
   connect();
+}
+
+/** Send a raw object over the WebSocket; silently drops when not connected. */
+function sendRaw(msg: LvClientMessage): void {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(JSON.stringify(msg));
+  } catch {
+    // drop — the onclose handler will schedule a reconnect
+  }
+}
+
+/**
+ * Send a live-view client message to the server.
+ * Silently dropped when the socket is not currently open.
+ */
+export function send(msg: LvClientMessage): void {
+  sendRaw(msg);
+}
+
+/**
+ * Register a runId as currently `awaiting_human`.
+ * The singleton re-sends `lv:attach` for all tracked runs on reconnect.
+ * Returns an unregister function.
+ */
+export function trackAwaitingRun(runId: string): () => void {
+  awaitingRuns.add(runId);
+  return () => {
+    awaitingRuns.delete(runId);
+  };
 }
 
 /** Subscribe to live RunEvents; returns an unsubscribe function. */

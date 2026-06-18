@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
+  AssistState,
   ListRunsOptions,
   ProfileRecord,
   RunRecord,
@@ -71,12 +72,13 @@ export function createRunStore(dbPath?: string): RunStore {
       string | null,
       string | null,
       string | null,
+      string | null,
       string,
     ]
   >(
     `UPDATE runs
      SET batch_id = ?, status = ?, attempts = ?, started_at = ?, finished_at = ?,
-         output = ?, failure_reason = ?, usage = ?, final_url = ?
+         output = ?, failure_reason = ?, usage = ?, final_url = ?, assist = ?
      WHERE id = ?`,
   );
 
@@ -193,6 +195,7 @@ export function createRunStore(dbPath?: string): RunStore {
         failureReason: patch.failureReason ?? existing.failureReason,
         usage: patch.usage ?? existing.usage,
         finalUrl: patch.finalUrl ?? existing.finalUrl,
+        assist: patch.assist ?? existing.assist,
       };
       updateRunStmt.run(
         next.batchId ?? null,
@@ -204,6 +207,7 @@ export function createRunStore(dbPath?: string): RunStore {
         next.failureReason ?? null,
         next.usage ? JSON.stringify(next.usage) : null,
         next.finalUrl ?? null,
+        next.assist ? JSON.stringify(next.assist) : null,
         id,
       );
       return next;
@@ -391,5 +395,6 @@ function rowToRecord(row: RunRow): RunRecord {
     failureReason: row.failure_reason ?? undefined,
     usage: row.usage === null ? undefined : (JSON.parse(row.usage) as TokenUsage),
     finalUrl: row.final_url ?? undefined,
+    assist: row.assist === null ? undefined : (JSON.parse(row.assist) as AssistState),
   };
 }

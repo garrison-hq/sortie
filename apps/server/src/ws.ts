@@ -7,18 +7,55 @@
  *   /api/runs/<runId>/screenshots/<stepIndex> so browser clients can fetch it
  *   (the on-disk path is meaningless outside the server host).
  * - 'run-step': step.observation is truncated to keep frames small.
+ * - 'run-awaiting-human' / 'run-resumed': passed through as-is.
  *
  * Wire events are shallow copies — the queue's event objects are shared with
  * other listeners and must never be mutated.
+ *
+ * The socket is now bidirectional (WP05): the client may send live-view
+ * control messages (`lv:*`) on the same connection. All inbound text frames
+ * are zod-validated; malformed messages are dropped and logged — never thrown
+ * across the socket (T025).
+ *
+ * DEPLOYMENT (R9): live remote control assumes a trusted local-first operator;
+ * network-exposed deployments MUST place auth in front of the server.
  */
 import type { FastifyInstance } from 'fastify';
-import type { RunEvent, RunQueue } from '@garrison-hq/sortie';
-import { VERSION } from '@garrison-hq/sortie';
+import type { RunEvent, RunQueue, RunStore } from '@garrison-hq/sortie';
+import {
+  VERSION,
+  LvClientMessageSchema,
+  FAILURE_REASON_CAPTCHA_UNSOLVED,
+} from '@garrison-hq/sortie';
+import { handleClientMessage, stopSession, stopSessionForRun } from './liveview.js';
 
 const WIRE_OBSERVATION_MAX_CHARS = 2000;
 
-export function registerEventsRoute(app: FastifyInstance, queue: RunQueue): void {
+export function registerEventsRoute(app: FastifyInstance, queue: RunQueue, store: RunStore): void {
+  // SECURITY (T021 / Finding 3): subscribe to queue events at the server level
+  // so that live-view sessions are torn down on timeout, auto-resume, and any
+  // non-WS finish path that bypasses the HTTP/WS control surface.
+  // This listener is registered once at startup (not per-connection).
+  queue.onEvent((ev) => {
+    if (ev.type === 'run-finished') {
+      // F-3: emit lv:stopped{reason:'timeout'} when a solve-timeout finishes a
+      // paused run so the client learns the explicit reason (LvStoppedSchema
+      // declares 'timeout' but it was never emitted before this fix).
+      // A captcha_unsolved failure reason is the canonical signal for timeout.
+      const isTimeout = ev.record?.failureReason === FAILURE_REASON_CAPTCHA_UNSOLVED;
+      stopSessionForRun(ev.runId, isTimeout ? 'timeout' : undefined).catch(() => {});
+    } else if (ev.type === 'run-resumed') {
+      // auto-resume / manual resume via non-WS path: tear down without sending
+      // lv:stopped (the per-connection lv:resume handler already sent it for
+      // WS-initiated resumes; for auto-resume the UI learns via run-resumed).
+      stopSessionForRun(ev.runId).catch(() => {});
+    }
+  });
+
   app.get('/api/events', { websocket: true }, (socket) => {
+    /** Opaque per-connection id for live-view scoping (T025). */
+    const connId = Symbol('ws-conn');
+
     socket.send(JSON.stringify({ type: 'hello', version: VERSION }));
 
     const unsubscribe = queue.onEvent((ev) => {
@@ -30,7 +67,38 @@ export function registerEventsRoute(app: FastifyInstance, queue: RunQueue): void
       }
     });
 
-    socket.on('close', unsubscribe);
+    // Inbound message handler — live-view control messages from the client.
+    socket.on('message', (raw: Buffer | ArrayBuffer | Buffer[]) => {
+      let text: string;
+      try {
+        text = raw.toString();
+      } catch {
+        // Non-text frame: ignore silently.
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        console.warn('[ws] malformed JSON from client — dropped');
+        return;
+      }
+
+      const result = LvClientMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        // Not a live-view message (could be unknown client-sent data): drop.
+        console.warn('[ws] inbound message failed lv schema validation — dropped');
+        return;
+      }
+
+      void handleClientMessage(connId, result.data, socket, queue, store);
+    });
+
+    socket.on('close', () => {
+      unsubscribe();
+      // Tear down any live-view session owned by this connection.
+      void stopSession(connId);
+    });
     socket.on('error', () => {
       socket.close();
     });
@@ -58,5 +126,6 @@ export function toWireEvent(ev: RunEvent): RunEvent {
       step: { ...ev.step, observation: ev.step.observation.slice(0, WIRE_OBSERVATION_MAX_CHARS) },
     };
   }
+  // run-awaiting-human and run-resumed pass through unchanged.
   return ev;
 }

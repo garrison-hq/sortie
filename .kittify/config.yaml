@@ -1,0 +1,11 @@
+vcs:
+  type: git
+agents:
+  available:
+  - claude
+  auto_commit: true
+project:
+  uuid: ce6addac-207d-4ab7-9e65-081809f3a097
+  slug: sortie
+  node_id: 415a1490fb46
+  build_id: ed1d7a5d-e8e3-4e9a-b27b-166168f1a15f

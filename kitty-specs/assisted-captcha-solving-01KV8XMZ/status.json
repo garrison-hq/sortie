@@ -1,0 +1,70 @@
+{
+  "event_count": 67,
+  "last_event_id": "01KV9C25QT8YYEHKTM5DR288RR",
+  "materialized_at": "2026-06-16T23:25:30.234556+00:00",
+  "mission_number": "",
+  "mission_slug": "assisted-captcha-solving-01KV8XMZ",
+  "mission_type": "software-dev",
+  "summary": {
+    "approved": 7,
+    "blocked": 0,
+    "canceled": 0,
+    "claimed": 0,
+    "done": 0,
+    "for_review": 0,
+    "in_progress": 0,
+    "in_review": 0,
+    "planned": 0
+  },
+  "work_packages": {
+    "WP01": {
+      "actor": "user",
+      "force_count": 1,
+      "lane": "approved",
+      "last_event_id": "01KV91AQ2WDE32FD42SE6BEQ0F",
+      "last_transition_at": "2026-06-16T20:17:55.804575+00:00"
+    },
+    "WP02": {
+      "actor": "user",
+      "force_count": 1,
+      "lane": "approved",
+      "last_event_id": "01KV91Q2SSB2VE5P1P0SG1RYR9",
+      "last_transition_at": "2026-06-16T20:24:41.017558+00:00"
+    },
+    "WP03": {
+      "actor": "user",
+      "force_count": 1,
+      "lane": "approved",
+      "last_event_id": "01KV92DEDCX7CTYBQKQEH30TQX",
+      "last_transition_at": "2026-06-16T20:36:53.804562+00:00"
+    },
+    "WP04": {
+      "actor": "user",
+      "force_count": 2,
+      "lane": "approved",
+      "last_event_id": "01KV94ZTXMNS6QMD0JG9JYNV1K",
+      "last_transition_at": "2026-06-16T21:21:53.588828+00:00"
+    },
+    "WP05": {
+      "actor": "user",
+      "force_count": 3,
+      "lane": "approved",
+      "last_event_id": "01KV9718S50RW3KRT0QSC09WTN",
+      "last_transition_at": "2026-06-16T21:57:37.701190+00:00"
+    },
+    "WP06": {
+      "actor": "user",
+      "force_count": 1,
+      "lane": "approved",
+      "last_event_id": "01KV97P8E4K46FTN6781HBJ72M",
+      "last_transition_at": "2026-06-16T22:09:05.476816+00:00"
+    },
+    "WP07": {
+      "actor": "user",
+      "force_count": 3,
+      "lane": "approved",
+      "last_event_id": "01KV9C25QT8YYEHKTM5DR288RR",
+      "last_transition_at": "2026-06-16T23:25:30.234556+00:00"
+    }
+  }
+}
