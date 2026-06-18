@@ -67,6 +67,8 @@ const clickInput = z.object({
     .describe('Element ref from the latest page snapshot, e.g. "e12" for the element [e12].'),
 });
 
+const dismissInput = z.object({});
+
 const typeInput = z.object({
   ref: z.string().describe('Ref of the input/textarea to type into, from the latest snapshot.'),
   text: z
@@ -227,6 +229,17 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     inputSchema: toInputSchema(readPageInput),
   },
   {
+    name: 'dismiss',
+    description:
+      'Close/dismiss a blocking dialog, modal, popup, cookie banner, or error overlay ' +
+      '(e.g. "something went wrong"/"Oeps", a promo or session modal). Presses Escape and ' +
+      'clicks common close controls ("Close", "×", "OK", "Sluiten", "Dismiss", "Accepteren", ' +
+      '"Probeer opnieuw") even when they are not present as refs in the snapshot. Use this when ' +
+      'an overlay blocks the page or a click keeps timing out, then continue. Does NOT bypass ' +
+      'CAPTCHAs or anti-bot walls — use fail for those.',
+    inputSchema: toInputSchema(dismissInput),
+  },
+  {
     name: 'done',
     description:
       'The goal is fully achieved. Submit the final structured result object. ' +
@@ -277,6 +290,8 @@ async function dispatch(
       return doNavigate(ctx, input);
     case 'click':
       return doClick(ctx, input);
+    case 'dismiss':
+      return doDismiss(ctx);
     case 'type':
       return doType(ctx, input);
     case 'select':
@@ -332,11 +347,80 @@ async function doClick(ctx: ExecutionContext, input: Record<string, unknown>): P
   if (typeof located === 'string') return located;
   // Describe before clicking — the click may navigate away.
   const desc = await describeLocator(located);
-  await located.click({ timeout: ACTION_TIMEOUT_MS });
+  try {
+    await located.click({ timeout: ACTION_TIMEOUT_MS });
+  } catch (err) {
+    const msg = errorMessage(err);
+    // A timeout / pointer-interception almost always means the target is
+    // hidden or covered by a dialog/overlay/banner. Steer the agent to clear
+    // the blocker instead of retrying the same (still-covered) element.
+    if (/timeout|intercept|not (?:visible|stable|enabled|clickable)|outside/i.test(msg)) {
+      return (
+        `Error: click on [${parsed.data.ref}] (${desc}) failed: ${msg}. ` +
+        'The element is likely hidden or covered by a dialog/overlay/cookie banner or an ' +
+        'error popup. Call the dismiss tool to close the blocker (it finds close controls even ' +
+        'when they are not in the snapshot), then retry — do NOT repeat this same click.'
+      );
+    }
+    return `Error: ${msg}`;
+  }
   await ctx.page
     .waitForLoadState('domcontentloaded', { timeout: ACTION_TIMEOUT_MS })
     .catch(() => {});
   return `Clicked [${parsed.data.ref}] ${desc}`;
+}
+
+/** Accessible-name match for a close/dismiss control (role=button path). */
+const DISMISS_NAME_RE =
+  /^\s*(close|sluiten|sluit|dismiss|ok|got it|akkoord|accepteren|×|✕|✖|x)\s*$/i;
+/** Visible-text match for a close/dismiss control (covers clickable <p>/<span>/<div>). */
+const DISMISS_TEXT_RE =
+  /^\s*(close|sluiten|sluit|dismiss|ok|got it|akkoord|accepteren|probeer opnieuw|opnieuw proberen|×|✕|✖)\s*$/i;
+
+async function doDismiss(ctx: ExecutionContext): Promise<string> {
+  const page = ctx.page;
+  // Ordered strategies — most specific first. Each may match several elements;
+  // we click the first VISIBLE one. The text strategy catches close controls
+  // that aren't real buttons/links (e.g. <p>Close</p>) and so never appear as
+  // refs in the distilled snapshot.
+  const strategies: Array<{ how: string; loc: Locator }> = [
+    { how: 'button', loc: page.getByRole('button', { name: DISMISS_NAME_RE }) },
+    {
+      how: 'aria-label',
+      loc: page.locator(
+        '[aria-label*="close" i], [aria-label*="dismiss" i], [aria-label*="sluit" i]',
+      ),
+    },
+    { how: 'text', loc: page.getByText(DISMISS_TEXT_RE) },
+    { how: 'class', loc: page.locator('[class*="close" i], [class*="dismiss" i]') },
+  ];
+  for (const { how, loc } of strategies) {
+    const count = await loc.count().catch(() => 0);
+    for (let i = 0; i < Math.min(count, 8); i++) {
+      const el = loc.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const label = (
+        (await el.innerText().catch(() => '')) ||
+        (await el.getAttribute('aria-label').catch(() => '')) ||
+        'control'
+      )
+        .trim()
+        .replaceAll(/\s+/g, ' ')
+        .slice(0, 40);
+      try {
+        await el.click({ timeout: ACTION_TIMEOUT_MS });
+        await page.waitForLoadState('domcontentloaded', { timeout: 1_500 }).catch(() => {});
+        return `Dismissed an overlay by clicking "${label}" (${how}). Re-examine the fresh snapshot and continue your task.`;
+      } catch {
+        // Not actionable — try the next candidate.
+      }
+    }
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  return (
+    'No obvious close control was clickable; pressed Escape to dismiss any overlay. ' +
+    'Re-examine the snapshot — if the blocker is still there, take a different path.'
+  );
 }
 
 async function doType(ctx: ExecutionContext, input: Record<string, unknown>): Promise<string> {
@@ -418,9 +502,29 @@ async function doExtract(ctx: ExecutionContext, input: Record<string, unknown>):
     instruction: parsed.data.instruction,
     provider: ctx.provider,
   });
-  let json = JSON.stringify(result.data);
+  const data = result.data;
+  let json = JSON.stringify(data);
   if (json.length > EXTRACT_OBSERVATION_MAX) {
     json = json.slice(0, EXTRACT_OBSERVATION_MAX) + TRUNCATION_MARKER;
+  }
+  // Fallback: when the semantic pass returns nothing, the model can miss short
+  // status lines (e.g. a "Verification Success" banner) that readability treats
+  // as boilerplate. Surface the raw visible page text so the agent can still
+  // read clearly-present content instead of concluding "nothing is here".
+  const isEmpty =
+    data == null || (typeof data === 'object' && Object.keys(data as object).length === 0);
+  if (isEmpty) {
+    const raw = await ctx.page
+      .evaluate((): string => {
+        const doc = (globalThis as unknown as { document: { body: { innerText?: string } | null } })
+          .document;
+        return doc.body && typeof doc.body.innerText === 'string' ? doc.body.innerText : '';
+      })
+      .catch(() => '');
+    const snippet = raw.replaceAll(/\s+/g, ' ').trim().slice(0, EXTRACT_OBSERVATION_MAX);
+    if (snippet.length > 0) {
+      return `Extracted: ${json}\n\n(No structured fields matched. Visible page text: "${snippet}")`;
+    }
   }
   return `Extracted: ${json}`;
 }

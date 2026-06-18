@@ -18,6 +18,10 @@ import type { ChallengeDetection, ChallengeFamily, PageSnapshot } from '../contr
 /** How much body text (chars) to inspect for markers. */
 const CHALLENGE_TEXT_LIMIT = 4_000;
 
+/** Hard cap for each page.evaluate detection probe — a probe must never be able
+ * to freeze the agent loop if the page is in a stuck/busy state. */
+const DETECT_EVAL_TIMEOUT_MS = 4_000;
+
 /** reCAPTCHA frame URL fragments. */
 const RECAPTCHA_FRAME_PATTERNS = ['recaptcha.net/recaptcha', 'google.com/recaptcha'] as const;
 
@@ -169,6 +173,8 @@ interface MinimalStyle {
 interface MinimalElement {
   getAttribute(name: string): string | null;
   getBoundingClientRect(): MinimalRect;
+  /** Present on form fields (e.g. the reCAPTCHA response token textarea). */
+  value?: string;
 }
 interface MinimalNodeList {
   length: number;
@@ -210,7 +216,7 @@ export async function detectChallengeOnPage(
   //    challenge (bframe), or a visible hCaptcha/Turnstile widget.
   let widget: { family: ChallengeFamily; signal: string } | null = null;
   try {
-    widget = (await page.evaluate((): { family: ChallengeFamily; signal: string } | null => {
+    const probe = page.evaluate((): { family: ChallengeFamily; signal: string } | null => {
       const win = globalThis as unknown as MinimalWindow;
       const isVisible = (el: MinimalElement): boolean => {
         const rect = el.getBoundingClientRect();
@@ -222,32 +228,47 @@ export async function detectChallengeOnPage(
           Number(style.opacity || '1') !== 0
         );
       };
-      for (const frame of win.document.querySelectorAll('iframe[src]')) {
-        const src = (frame.getAttribute('src') ?? '').toLowerCase();
-        const isRecaptcha =
-          src.includes('recaptcha.net/recaptcha') || src.includes('google.com/recaptcha');
-        // The image-selection popup — only present when a human must solve it.
-        if (isRecaptcha && src.includes('bframe') && isVisible(frame)) {
+      // A reCAPTCHA whose response token is populated has been SOLVED — it is no
+      // longer a challenge even though the widget stays on screen (a v2 checkbox
+      // keeps its green check). Treat it as cleared so a resume can continue
+      // instead of re-pausing on the same solved widget.
+      const recaptchaSolved = (): boolean => {
+        for (const t of win.document.querySelectorAll('textarea[name="g-recaptcha-response"]')) {
+          if ((t.value ?? '').length > 0) return true;
+        }
+        return false;
+      };
+      // Classify a single visible iframe src into a challenge family, or null.
+      const classify = (
+        src: string,
+        rcSolved: boolean,
+      ): { family: ChallengeFamily; signal: string } | null => {
+        const rc =
+          !rcSolved &&
+          (src.includes('recaptcha.net/recaptcha') || src.includes('google.com/recaptcha'));
+        if (rc && src.includes('bframe'))
           return { family: 'recaptcha', signal: 'reCAPTCHA image challenge visible' };
-        }
-        // The v2 checkbox — but NOT the invisible-v3 badge anchor.
-        if (
-          isRecaptcha &&
-          src.includes('anchor') &&
-          !src.includes('size=invisible') &&
-          isVisible(frame)
-        ) {
+        if (rc && src.includes('anchor') && !src.includes('size=invisible'))
           return { family: 'recaptcha', signal: 'reCAPTCHA checkbox visible' };
-        }
-        if (src.includes('hcaptcha.com') && isVisible(frame)) {
+        if (src.includes('hcaptcha.com'))
           return { family: 'hcaptcha', signal: 'hCaptcha widget visible' };
-        }
-        if (src.includes('challenges.cloudflare.com') && isVisible(frame)) {
+        if (src.includes('challenges.cloudflare.com'))
           return { family: 'turnstile', signal: 'Cloudflare Turnstile widget visible' };
-        }
+        return null;
+      };
+      const solved = recaptchaSolved();
+      for (const frame of win.document.querySelectorAll('iframe[src]')) {
+        if (!isVisible(frame)) continue;
+        const hit = classify((frame.getAttribute('src') ?? '').toLowerCase(), solved);
+        if (hit) return hit;
       }
       return null;
-    })) as { family: ChallengeFamily; signal: string } | null;
+    });
+    // Never let a detection probe freeze the loop — cap it.
+    widget = (await Promise.race([
+      probe,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), DETECT_EVAL_TIMEOUT_MS)),
+    ])) as { family: ChallengeFamily; signal: string } | null;
   } catch {
     // Non-fatal — fall through to the interstitial text check.
   }
@@ -260,11 +281,15 @@ export async function detectChallengeOnPage(
   //    bare service names here (see INTERSTITIAL_MARKERS note).
   let bodyText = '';
   try {
-    bodyText = await page.evaluate((limit: number): string => {
+    const probe = page.evaluate((limit: number): string => {
       const doc = (globalThis as unknown as MinimalWindow).document;
       const text = doc.body && typeof doc.body.innerText === 'string' ? doc.body.innerText : '';
       return text.slice(0, limit);
     }, CHALLENGE_TEXT_LIMIT);
+    bodyText = await Promise.race([
+      probe,
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), DETECT_EVAL_TIMEOUT_MS)),
+    ]);
   } catch {
     // Non-fatal.
   }

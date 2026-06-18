@@ -60,6 +60,9 @@ interface LoopState<T> {
   usage: TokenUsage;
   pendingToolCallId: string | undefined;
   pendingObservation: string;
+  /** One-shot note prepended to the next snapshot message (e.g. after a human
+   *  solves a challenge on resume), so the model continues instead of failing. */
+  resumeNote?: string;
   system: string;
   ctx: ExecutionContext;
   /** Lazy getter: provider is only resolved on the first chat() call, after
@@ -103,6 +106,7 @@ export async function runAgent<T>(opts: AgentRunOptions<T>): Promise<AgentRunRes
       ? JSON.stringify(z.toJSONSchema(opts.schema, { io: 'input' }), null, 2)
       : undefined,
     maxSteps,
+    assistEnabled,
   });
 
   let manager: BrowserManager | undefined;
@@ -266,13 +270,15 @@ async function runStep<T>(
 
 /** Append the current snapshot to the message history. */
 function appendSnapshotMessage<T>(state: LoopState<T>, snapshotBlock: string): void {
+  const note = state.resumeNote ? `${state.resumeNote}\n\n` : '';
+  state.resumeNote = undefined;
   if (state.pendingToolCallId === undefined) {
-    state.messages.push({ role: 'user', content: snapshotBlock });
+    state.messages.push({ role: 'user', content: `${note}${snapshotBlock}` });
   } else {
     state.messages.push({
       role: 'toolResult',
       toolCallId: state.pendingToolCallId,
-      content: `${state.pendingObservation}\n\n${snapshotBlock}`,
+      content: `${state.pendingObservation}\n\n${note}${snapshotBlock}`,
     });
   }
 }
@@ -336,7 +342,13 @@ async function handleChallengeStep<T>(
     };
   }
 
-  // Challenge cleared — apply humanized pacing before the LLM call (T013).
+  // Challenge cleared by the human. Tell the model so it CONTINUES instead of
+  // failing on the still-visible (but now solved) widget per its CAPTCHA rule.
+  state.resumeNote =
+    '[A human has just solved the CAPTCHA / anti-bot challenge on this page for you. ' +
+    'It is now cleared. Do NOT call fail because of the CAPTCHA — continue the task ' +
+    '(for example, click the submit button or proceed to the next step).]';
+  // Apply humanized pacing before the LLM call (T013).
   await humanizedDelay();
   return null;
 }
