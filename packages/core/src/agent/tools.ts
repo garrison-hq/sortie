@@ -511,8 +511,7 @@ async function doExtract(ctx: ExecutionContext, input: Record<string, unknown>):
   // status lines (e.g. a "Verification Success" banner) that readability treats
   // as boilerplate. Surface the raw visible page text so the agent can still
   // read clearly-present content instead of concluding "nothing is here".
-  const isEmpty =
-    data == null || (typeof data === 'object' && Object.keys(data as object).length === 0);
+  const isEmpty = data == null || (typeof data === 'object' && Object.keys(data).length === 0);
   if (isEmpty) {
     const raw = await ctx.page
       .evaluate((): string => {
